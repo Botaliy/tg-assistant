@@ -7,5 +7,8 @@ services:
       # Login session + rules. The session is full access to the Telegram
       # account, so this directory must stay private (chmod 700).
       - ./data:/app/data
+    # The VPS has 1 GB and no swap, shared with expense-tracker and greek-cards.
+    mem_limit: 150m
     # No ports: the userbot only makes outgoing connections to Telegram,
-    # so it doesn't collide with expense-tracker's nginx on 80/443.
+    # so it doesn't collide with expense-tracker's nginx on 80/443, and it
+    # stays on its own docker network, away from expense-tracker_default.

@@ -9,4 +9,7 @@ COPY bot ./bot
 
 RUN uv sync --frozen --no-dev
 
-CMD ["uv", "run", "--no-dev", "python", "-m", "bot.main"]
+# Run the venv directly: "uv run" would keep an extra process in memory.
+ENV PATH="/app/.venv/bin:$PATH"
+
+CMD ["python", "-m", "bot.main"]

@@ -15,7 +15,7 @@ fi
 
 if [ ! -f data/assistant.session ]; then
     echo "==> ERROR: not logged in yet. Run once:" >&2
-    echo "    docker compose run --rm bot uv run --no-dev python -m bot.login" >&2
+    echo "    docker compose run --rm bot python -m bot.login" >&2
     exit 1
 fi
 

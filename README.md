@@ -35,7 +35,7 @@
    git clone <repo> ~/tg-assistant && cd ~/tg-assistant
    cp .env.example .env   # вписать API_ID и API_HASH
    chmod 700 data
-   docker compose run --rm bot uv run --no-dev python -m bot.login   # телефон, код, пароль 2FA
+   docker compose run --rm bot python -m bot.login   # телефон, код, пароль 2FA
    ./deploy.sh
    ```
 3. Логи: `docker compose logs -f bot`.
