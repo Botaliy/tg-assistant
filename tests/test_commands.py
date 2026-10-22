@@ -90,12 +90,10 @@ def test_rules_and_unrule(store):
     assert run(store, ".unrule 1").is_error
 
 
-def test_ai_warns_when_switched_off_and_refuses_groups(store):
+def test_ai_warns_when_switched_off(store):
     answer = run(store, ".ai", chat_id=5, label="@vasya")
     assert answer.is_error and ".ai on" in answer.text
     assert 5 in store.ai_chats
-    assert run(store, ".ai", chat_id=-100).is_error
-    assert -100 not in store.ai_chats
     run(store, ".ai on")
     assert store.ai_enabled
     assert not run(store, ".ai", chat_id=6, label="@petya").is_error

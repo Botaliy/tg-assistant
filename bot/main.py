@@ -165,7 +165,8 @@ def setup_userbot(
         sender = await event.get_sender()
         if getattr(sender, "bot", False):
             return  # two auto-responders talking to each other never ends well
-        if ai is not None and event.is_private and await ai.on_incoming(event.chat_id, sender):
+        mention_id = event.id if event.mentioned else None
+        if ai is not None and await ai.on_incoming(event.chat_id, sender, mention_id):
             return  # the AI answers instead of keyword rules
 
         rule = store.reply_for(event.chat_id, event.is_private, text)
