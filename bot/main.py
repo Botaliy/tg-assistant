@@ -263,7 +263,7 @@ async def run() -> None:
         bot_me.username, settings.ai_model if ai else "off",
     )
     if ai is not None and ai.deepseek is not None:
-        log.info("DeepSeek on: %s, effort %s", settings.deepseek_model, settings.deepseek_effort or "default")
+        log.info("DeepSeek on: %s, effort %s", ai.deepseek.model, ai.deepseek.effort or "default")
     await asyncio.gather(client.run_until_disconnected(), bot.run_until_disconnected())
 
 
