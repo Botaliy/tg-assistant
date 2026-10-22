@@ -65,18 +65,24 @@ def muted_screen(store: Store):
 
 
 def ai_screen(store: Store):
+    toggle = (
+        Button.inline("⏸ Выключить ИИ везде", b"aioff") if store.ai_enabled
+        else Button.inline("▶️ Включить ИИ", b"aion")
+    )
     rows = [
-        [Button.inline(f"🔕 {f'{a.label} #{c}'.strip()}", f"noai:{c}".encode())]
+        [Button.inline(f"🔕 {'🆕 ' if a.auto else ''}{f'{a.label} #{c}'.strip()}", f"noai:{c}".encode())]
         for c, a in sorted(store.ai_chats.items())
     ]
-    text = (
-        "ИИ отвечает за тебя в этих чатах. Кнопка выключает."
-        if rows else "ИИ пока ни с кем не общается."
+    text = "🤖 ИИ " + ("включён." if store.ai_enabled else "выключен.") + (
+        " Сам отвечает незнакомцам (не из контактов), которые написали первыми, "
+        "и людям из списка. Каждый разговор кончается отчётом здесь."
     )
-    text += "\n\nХарактер ответов задаётся текстом: .persona пишу коротко, на «ты», шучу"
+    if rows:
+        text += "\n\nСписок (🆕 — незнакомец, подхвачен сам). Кнопка убирает из списка навсегда."
+    text += "\n\nХарактер ответов: .persona пишу коротко, на «ты», шучу"
     if store.persona:
         text += f"\nСейчас: {store.persona}"
-    return text, rows + [[Button.inline("➕ Включить для…", b"new:ai")], BACK]
+    return text, [[toggle]] + rows + [[Button.inline("➕ Добавить в список", b"new:ai")], BACK]
 
 
 def person_screen(store: Store, chat_id: int, label: str):
@@ -199,6 +205,12 @@ def setup(bot: TelegramClient, assistant, store: Store, owner_id: int) -> None:
             await event.answer(f"Правило {arg} удалено")
             await edit(event, rules_screen(store))
         elif name == "ai":
+            await edit(event, ai_screen(store))
+        elif name in ("aion", "aioff"):
+            if name == "aion" and not assistant.ai_available:
+                await event.answer(commands.NO_AI, alert=True)
+                return
+            store.set_ai_enabled(name == "aion")
             await edit(event, ai_screen(store))
         elif name == "noai":
             store.set_ai(int(arg), False)

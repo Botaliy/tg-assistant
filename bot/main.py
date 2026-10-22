@@ -119,6 +119,8 @@ def setup_userbot(
             return  # commands to the panel bot are its business
         cmd = commands.parse(event.raw_text)
         if cmd is None:
+            if ai is not None and event.is_private:
+                await ai.on_outgoing(event)
             return
         log.info("Command %r in %s, reply to %s", event.raw_text, event.chat_id, event.reply_to_msg_id)
         # Typed in a conversation: hide it from the interlocutor right away.
@@ -160,16 +162,14 @@ def setup_userbot(
             log.info("Auto-deleted message %s in %s", event.id, event.chat_id)
             return
 
-        ai_chat = ai is not None and event.is_private and event.chat_id in store.ai_chats
-        rule = None if ai_chat else store.reply_for(event.chat_id, event.is_private, text)
-        if not ai_chat and rule is None:
-            return
         sender = await event.get_sender()
         if getattr(sender, "bot", False):
             return  # two auto-responders talking to each other never ends well
-        if ai_chat:
-            ai.on_incoming(event.chat_id)  # the AI answers instead of keyword rules
-        elif cooldown.ready((event.chat_id, rule.id)):
+        if ai is not None and event.is_private and await ai.on_incoming(event.chat_id, sender):
+            return  # the AI answers instead of keyword rules
+
+        rule = store.reply_for(event.chat_id, event.is_private, text)
+        if rule is not None and cooldown.ready((event.chat_id, rule.id)):
             await event.reply(rule.text)
             log.info("Auto-replied in %s by rule %s", event.chat_id, rule.id)
 
@@ -192,7 +192,8 @@ async def run() -> None:
 
     async def notify(text: str) -> None:
         try:
-            await bot.send_message(me.id, text)
+            # Plain text: AI replies and reports quote strangers' messages.
+            await bot.send_message(me.id, text, parse_mode=None, link_preview=False)
         except RPCError as e:
             log.warning("Can't reach the panel: %s", e)
 
@@ -205,7 +206,8 @@ async def run() -> None:
 
         ai = AiResponder(
             client, store, anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key),
-            settings.ai_model, settings.ai_effort, utils.get_display_name(me), notify,
+            settings.ai_model, settings.ai_effort, settings.ai_daily_per_chat,
+            settings.ai_daily_total, settings.ai_stranger_limit, utils.get_display_name(me), notify,
         )
     setup_userbot(
         client, assistant, store, Cooldown(settings.reply_cooldown_seconds), notify, bot_me.id, ai,

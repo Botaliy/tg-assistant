@@ -34,7 +34,8 @@ HELP = """Всё есть на кнопках в /menu. Перешли сюда 
 .del @user N — удалить его последние N сообщений
 .rules [@user] — список правил
 .unrule N — удалить правило N
-.ai @user / .noai @user — включить / выключить ИИ-собеседника для него
+.ai on / .ai off — включить / выключить ИИ-собеседника целиком
+.ai @user / .noai @user — добавить в список ИИ / убрать (и не подхватывать сам)
 .persona текст — как ИИ должен общаться от тебя (без текста — показать, «-» — сбросить)
 Вместо @user можно +телефон из контактов или #id из .rules.
 
@@ -118,6 +119,10 @@ def execute(store: Store, cmd: Command, chat_id: int | None, label: str = "") ->
             return Answer(f"Удаляю все новые сообщения {scope}" if changed else f"{label} уже заглушён")
         return Answer(f"Больше не удаляю сообщения {scope}" if changed else f"{label} и не был заглушён")
 
+    if cmd.name == "ai" and cmd.arg in ("on", "off") and not cmd.target:
+        store.set_ai_enabled(cmd.arg == "on")
+        return Answer("ИИ включён" if store.ai_enabled else "ИИ выключен везде")
+
     if cmd.name in ("ai", "noai"):
         if chat_id is None:
             return error(f"Для кого? Формат: .{cmd.name} @user")
@@ -177,9 +182,10 @@ def format_rules(store: Store, chat_id: int | None) -> str:
     if muted:
         lines.append("Заглушены: " + ", ".join(muted))
     ai = [
-        f"{a.label} #{c}".strip() for c, a in sorted(store.ai_chats.items())
+        f"{'🆕 ' if a.auto else ''}{a.label} #{c}".strip() for c, a in sorted(store.ai_chats.items())
         if chat_id is None or c == chat_id
     ]
     if ai:
-        lines.append("ИИ отвечает: " + ", ".join(ai))
+        state = "" if store.ai_enabled else " (сейчас ИИ выключен)"
+        lines.append(f"ИИ отвечает{state}: " + ", ".join(ai))
     return "\n".join(lines) or "Правил пока нет"

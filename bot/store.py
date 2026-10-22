@@ -7,15 +7,14 @@ from bot.rules import DELETE, REPLY, Rule
 
 @dataclass
 class AiChat:
-    """A chat where Claude answers for me.
-
-    Messages up to summarized_up_to are folded into `summary`; the ones after
-    it are sent to the model verbatim.
-    """
+    """A chat where Claude answers for me."""
 
     label: str = ""
-    summary: str = ""
-    summarized_up_to: int = 0
+    # True: a stranger who wrote first, picked up automatically. False: I
+    # added the chat myself (".ai @user").
+    auto: bool = False
+    replies: int = 0  # AI replies here, ever: strangers get a limited number
+    reported_up_to: int = 0  # last message id covered by a report to the panel
 
 
 class Store:
@@ -28,6 +27,10 @@ class Store:
         # Whether the userbot has already pressed /start in the panel bot for me.
         self.panel_started = False
         self.ai_chats: dict[int, AiChat] = {}
+        # The master switch for AI chats; off until I turn it on in the panel.
+        self.ai_enabled = False
+        # Chats where I turned the AI off: never picked up automatically again.
+        self.ai_blocked: set[int] = set()
         # How Claude should sound in AI chats: set by ".persona", empty = default.
         self.persona = ""
         self._next_id = 1
@@ -36,7 +39,13 @@ class Store:
             self.rules = [Rule(**r) for r in data.get("rules", [])]
             self.muted = {int(c): label for c, label in data.get("muted", {}).items()}
             self.panel_started = data.get("panel_started", False)
-            self.ai_chats = {int(c): AiChat(**a) for c, a in data.get("ai_chats", {}).items()}
+            fields = set(AiChat.__dataclass_fields__)
+            self.ai_chats = {
+                int(c): AiChat(**{k: v for k, v in a.items() if k in fields})
+                for c, a in data.get("ai_chats", {}).items()
+            }
+            self.ai_enabled = data.get("ai_enabled", False)
+            self.ai_blocked = set(data.get("ai_blocked", []))
             self.persona = data.get("persona", "")
             self._next_id = data.get("next_id", 1)
 
@@ -72,16 +81,22 @@ class Store:
         self.save()
         return True
 
-    def set_ai(self, chat_id: int, on: bool, label: str = "") -> bool:
+    def set_ai(self, chat_id: int, on: bool, label: str = "", auto: bool = False) -> bool:
         """Returns False if the chat was already in that state."""
         if (chat_id in self.ai_chats) == on:
             return False
         if on:
-            self.ai_chats[chat_id] = AiChat(label=label)
+            self.ai_chats[chat_id] = AiChat(label=label, auto=auto)
+            self.ai_blocked.discard(chat_id)
         else:
             del self.ai_chats[chat_id]
+            self.ai_blocked.add(chat_id)
         self.save()
         return True
+
+    def set_ai_enabled(self, enabled: bool) -> None:
+        self.ai_enabled = enabled
+        self.save()
 
     def set_persona(self, persona: str) -> None:
         self.persona = persona
@@ -114,7 +129,9 @@ class Store:
             "panel_started": self.panel_started,
             "rules": [r.to_dict() for r in self.rules],
             "muted": {str(c): label for c, label in sorted(self.muted.items())},
+            "ai_enabled": self.ai_enabled,
             "ai_chats": {str(c): asdict(a) for c, a in sorted(self.ai_chats.items())},
+            "ai_blocked": sorted(self.ai_blocked),
             "persona": self.persona,
         }
         tmp = self.path.with_suffix(".tmp")

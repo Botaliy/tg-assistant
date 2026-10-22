@@ -26,11 +26,17 @@ class Settings(BaseSettings):
     # seconds, so a chatty interlocutor doesn't get the canned answer 10 times.
     reply_cooldown_seconds: int = 600
 
-    # AI chats (".ai @user"): Claude answers for me. Empty key = turned off.
+    # AI chats (see bot.ai): Claude answers for me. Empty key = turned off.
     anthropic_api_key: str = ""
-    ai_model: str = "claude-opus-5-5"
+    ai_model: str = "claude-haiku-5-5"
     # low | medium | high | xhigh | max. Chat replies don't need deep thinking.
     ai_effort: str = "low"
+    # Spend caps: replies per chat and in total per day.
+    ai_daily_per_chat: int = 20
+    ai_daily_total: int = 200
+    # A stranger gets at most this many AI replies, ever; then the AI hands
+    # the chat over to me with a report.
+    ai_stranger_limit: int = 10
 
     @property
     def data_path(self) -> Path:
