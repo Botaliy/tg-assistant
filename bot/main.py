@@ -111,6 +111,7 @@ def setup_userbot(
         cmd = commands.parse(event.raw_text)
         if cmd is None:
             return
+        log.info("Command %r in %s, reply to %s", event.raw_text, event.chat_id, event.reply_to_msg_id)
         # Typed in a conversation: hide it from the interlocutor right away.
         await assistant.delete(event.chat_id, [event.id])
         title = utils.get_display_name(await event.get_chat())
@@ -133,6 +134,7 @@ def setup_userbot(
         except Exception as e:
             log.exception("Command %r failed", event.raw_text)
             answer = error(f"Ошибка: {e}")
+        log.info("Command .%s in %s: %s", cmd.name, event.chat_id, answer.text)
 
         # Silent in conversations: only errors and asked-for output, and
         # those go to the panel.
