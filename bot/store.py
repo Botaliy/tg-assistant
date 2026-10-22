@@ -17,6 +17,8 @@ class AiChat:
     # added the chat myself (".ai @user").
     auto: bool = False
     replies: int = 0  # AI replies here, ever: strangers get a limited number
+    # The AI doesn't send here, it brings a draft to the panel (".ai draft").
+    drafts: bool = False
     reported_up_to: int = 0  # last message id covered by a report to the panel
 
 
@@ -105,6 +107,16 @@ class Store:
         else:
             del self.ai_chats[chat_id]
             self.ai_blocked.add(chat_id)
+        self.save()
+        return True
+
+    def set_drafts(self, chat_id: int, drafts: bool) -> bool:
+        """For an AI chat: drafts in the panel instead of sending. Returns
+        False if nothing changed."""
+        chat = self.ai_chats.get(chat_id)
+        if chat is None or chat.drafts == drafts:
+            return False
+        chat.drafts = drafts
         self.save()
         return True
 

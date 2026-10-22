@@ -18,6 +18,7 @@ from bot.store import Store
 
 if TYPE_CHECKING:
     from bot.ai import AiResponder
+    from bot.journal import Draft
 
 log = logging.getLogger("tg-assistant")
 
@@ -95,14 +96,41 @@ class Assistant:
     def deepseek_available(self) -> bool:
         return self.ai is not None and self.ai.deepseek is not None
 
-    def answer_with_ai(self, chat_id: int, label: str, reply_to: int | None = None) -> Answer:
-        """A one-off AI answer in a chat, in the background."""
+    def answer_with_ai(
+        self, chat_id: int, label: str, reply_to: int | None = None, context: int | None = None,
+        draft: bool = False,
+    ) -> Answer:
+        """A one-off AI answer in a chat, in the background; with draft, a
+        draft of it in the panel, from the last `context` messages."""
         if self.ai is None:
             return error(commands.NO_AI)
-        task = asyncio.create_task(self.ai.answer_now(chat_id, label, reply_to))
+        if draft:
+            self._background(self.ai.draft_now(chat_id, label, reply_to, context))
+        else:
+            self._background(self.ai.answer_now(chat_id, label, reply_to))
+        return Answer(f"ИИ пишет черновик для {label or chat_id}" if draft else f"ИИ отвечает {label or chat_id}")
+
+    def redraft(self, draft_id: int) -> Answer:
+        if self.ai is None:
+            return error(commands.NO_AI)
+        self._background(self.ai.redraft(draft_id))
+        return Answer("Пишу другой вариант…")
+
+    def draft(self, draft_id: int) -> "Draft | None":
+        return self.journal.get_draft(draft_id)
+
+    async def send_draft(self, draft_id: int, text: str | None = None) -> Answer:
+        if self.ai is None:
+            return error(commands.NO_AI)
+        try:
+            return Answer(await self.ai.send_draft(draft_id, text))
+        except (ValueError, RPCError) as e:
+            return error(f"Не получилось отправить: {e}")
+
+    def _background(self, coro) -> None:
+        task = asyncio.create_task(coro)
         self._tasks.add(task)  # keep a reference until it's done
         task.add_done_callback(self._tasks.discard)
-        return Answer(f"ИИ отвечает {label or chat_id}")
 
     async def run_command(
         self, cmd: commands.Command, chat_id: int | None, label: str,
@@ -130,6 +158,14 @@ class Assistant:
             if chat_id is None:
                 return error("Кому? Формат: .ans @user")
             return self.answer_with_ai(chat_id, label, None if cmd.target else reply_to)
+        if cmd.name == "draft":
+            if chat_id is None:
+                return error("Кому? Формат: .draft @user [N]")
+            try:
+                context = commands.parse_draft_context(cmd.arg)
+            except ValueError as e:
+                return error(str(e))
+            return self.answer_with_ai(chat_id, label, None if cmd.target else reply_to, context, draft=True)
         if cmd.name == "reset":
             if chat_id is None:
                 return error("Кому? Формат: .reset @user")
@@ -207,7 +243,7 @@ def setup_userbot(
         if getattr(sender, "bot", False):
             return  # two auto-responders talking to each other never ends well
         mention_id = event.id if event.mentioned else None
-        if ai is not None and await ai.on_incoming(event.chat_id, sender, mention_id):
+        if ai is not None and await ai.on_incoming(event.chat_id, sender, mention_id, event.message):
             return  # the AI answers instead of keyword rules
 
         rule = store.reply_for(event.chat_id, event.is_private, text)
@@ -241,6 +277,16 @@ async def run() -> None:
             # ValueError: the panel bot hasn't seen me yet (no /start pressed).
             log.warning("Can't reach the panel: %s", e)
 
+    async def show_draft(draft_id: int, warning: str | None) -> None:
+        draft = journal.get_draft(draft_id)
+        if draft is None:
+            return
+        text, buttons = panel.draft_screen(draft, warning)
+        try:
+            await bot.send_message(me.id, text, buttons=buttons, parse_mode=None, link_preview=False)
+        except (RPCError, ValueError) as e:
+            log.warning("Can't reach the panel: %s", e)
+
     ai = None
     if settings.anthropic_api_key:
         # Imported only when needed: the SDK adds ~35 MB to a 60 MB process.
@@ -259,6 +305,7 @@ async def run() -> None:
                 prices=(settings.deepseek_price_input, settings.deepseek_price_cache_hit,
                         settings.deepseek_price_output),
             ) if settings.deepseek_api_key else None,
+            show_draft=show_draft, media_reply=settings.ai_media_reply,
         )
         ai.resume_reports()
     setup_userbot(

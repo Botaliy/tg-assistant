@@ -18,13 +18,15 @@ from bot.rules import DELETE, REPLY
 from bot.store import DEEPSEEK, Store
 
 PREFIX = "."
-NAMES = {"help", "del", "mute", "unmute", "reply", "filter", "rules", "unrule", "ai", "noai", "persona", "ans", "reset", "model", "usage"}
+NAMES = {"help", "del", "mute", "unmute", "reply", "filter", "rules", "unrule", "ai", "noai", "persona", "ans", "reset", "model", "usage", "draft"}
 NO_AI = "ИИ выключен: впиши ANTHROPIC_API_KEY в .env на сервере и перезапусти бота"
 NO_DEEPSEEK = "DeepSeek не настроен: впиши DEEPSEEK_API_KEY в .env на сервере и перезапусти бота"
 # What ".model" understands; None is Claude.
 MODELS = {"deepseek": DEEPSEEK, "ds": DEEPSEEK, "claude": None, "-": None}
 # Answers to these are what was asked for, not a confirmation, so they're
 # sent to the panel even when the command was typed in a conversation.
+# ".draft N" reads at most this many messages.
+MAX_DRAFT_CONTEXT = 50
 OUTPUT_COMMANDS = {"help", "rules", "persona", "model", "usage"}
 
 HELP = """Всё есть на кнопках в /menu. Перешли сюда сообщение человека, и появятся кнопки для него.
@@ -42,6 +44,8 @@ HELP = """Всё есть на кнопках в /menu. Перешли сюда 
 .ai on @user / .ai off @user — то же, что .ai @user / .noai @user
 .ai в группе — ИИ отвечает там, когда тебя упомянут или ответят тебе
 .ans @user — ИИ разово отвечает ему, даже если ИИ для него выключен
+.draft @user [N] — черновик ответа ему сюда, по последним N сообщениям (по умолчанию 10, до 50)
+.ai draft @user — ИИ ведёт чат, но не отправляет сам, а присылает сюда черновики
 .reset @user — сбросить ему дневной лимит ответов ИИ (незнакомцу — и общий)
 .persona текст — общий характер ИИ (без текста — показать, «-» — сбросить)
 .persona @user текст — характер ИИ с ним, важнее общего
@@ -53,6 +57,8 @@ HELP = """Всё есть на кнопках в /menu. Перешли сюда 
 .del — ответом на сообщение: удалить его у обоих
 .del N — удалить последние N сообщений собеседника
 .ans — ИИ разово отвечает на последние сообщения (ответом на сообщение — реплаем на него)
+.draft [N] — то же, но черновиком в пульт, по последним N сообщениям
+.ai draft — ИИ в этом чате только присылает черновики в пульт
 .ai on / .ai off — включить / выключить ИИ только в этом чате (.ai off = .noai)
 .model deepseek / .model claude — чем ИИ отвечает в этом чате
 Остальные команды там тоже работают (без @user, для этого чата),
@@ -109,6 +115,15 @@ def parse_del_count(arg: str) -> int | None:
     return min(int(arg), 100)
 
 
+def parse_draft_context(arg: str) -> int | None:
+    """N from ".draft N", capped at MAX_DRAFT_CONTEXT; None: the usual context."""
+    if not arg:
+        return None
+    if not arg.isdigit() or int(arg) < 1:
+        raise ValueError("После .draft нужно число сообщений, например .draft 30")
+    return min(int(arg), MAX_DRAFT_CONTEXT)
+
+
 def error(text: str) -> Answer:
     return Answer(text, is_error=True)
 
@@ -143,9 +158,14 @@ def execute(store: Store, cmd: Command, chat_id: int | None, label: str = "") ->
             return error(f"Для кого? Формат: .{cmd.name} @user")
         on = cmd.name == "ai" and cmd.arg != "off"
         changed = store.set_ai(chat_id, on, label)
+        if on:
+            # ".ai draft": drafts in the panel; ".ai" / ".ai on": answers by itself.
+            changed = store.set_drafts(chat_id, cmd.arg == "draft") or changed
         if on and not store.ai_enabled:
             # An error so that it reaches the panel even from a conversation.
             return error(f"{label or chat_id} в списке ИИ, но сам ИИ выключен: включи его в пульте (.ai on или кнопкой)")
+        if on and cmd.arg == "draft":
+            return Answer(f"ИИ присылает черновики {scope}" if changed else f"ИИ уже присылает черновики {scope}")
         if on:
             return Answer(f"ИИ отвечает {scope}" if changed else f"ИИ уже отвечает {scope}")
         return Answer(f"ИИ больше не отвечает {scope}" if changed else f"ИИ и не отвечал {scope}")
@@ -225,7 +245,8 @@ def format_rules(store: Store, chat_id: int | None) -> str:
     if muted:
         lines.append("Заглушены: " + ", ".join(muted))
     ai = [
-        f"{'🆕 ' if a.auto else ''}{a.label} #{c}".strip() for c, a in sorted(store.ai_chats.items())
+        f"{'🆕 ' if a.auto else ''}{'📝 ' if a.drafts else ''}{a.label} #{c}".strip()
+        for c, a in sorted(store.ai_chats.items())
         if chat_id is None or c == chat_id
     ]
     if ai:

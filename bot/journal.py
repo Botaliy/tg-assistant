@@ -1,5 +1,6 @@
 """What happens over time, in SQLite (data/assistant.db): daily AI reply
-counters, reports waiting to be sent, past reports and tokens spent.
+counters, reports waiting to be sent, past reports, drafts waiting for my
+decision and tokens spent.
 
 Settings stay in rules.json (bot.store); this is the part that grows or used
 to be lost on a restart. Calls are synchronous: each is a tiny local query.
@@ -30,6 +31,10 @@ CREATE TABLE IF NOT EXISTS usage (
     cache_read INTEGER NOT NULL, cache_write INTEGER NOT NULL, cost REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS usage_day ON usage (day);
+CREATE TABLE IF NOT EXISTS drafts (
+    id INTEGER PRIMARY KEY, ts REAL NOT NULL, chat_id INTEGER NOT NULL, label TEXT NOT NULL,
+    text TEXT NOT NULL, reply_to INTEGER, context INTEGER NOT NULL
+);
 """
 
 # $ per 1M tokens: input, output. Cache reads cost a tenth of input (Opus 5.5:
@@ -54,6 +59,18 @@ class Usage:
     output: int = 0
     cache_read: int = 0
     cache_write: int = 0
+
+
+@dataclass
+class Draft:
+    """An AI answer waiting in the panel for me to send, redo or drop."""
+
+    id: int
+    chat_id: int
+    label: str
+    text: str
+    reply_to: int | None  # the message it answers, as a reply
+    context: int  # how many messages it read
 
 
 def claude_cost(model: str, usage: Usage) -> float | None:
@@ -118,6 +135,30 @@ class Journal:
             "INSERT INTO reports (ts, chat_id, label, reason, text) VALUES (?, ?, ?, ?, ?)",
             (time.time(), chat_id, label, reason, text),
         )
+
+    # Drafts.
+
+    def save_draft(
+        self, chat_id: int, label: str, text: str, reply_to: int | None, context: int,
+        draft_id: int | None = None,
+    ) -> int:
+        """A new draft, or another version of draft_id. Returns its id."""
+        if draft_id is not None:
+            self.db.execute("DELETE FROM drafts WHERE id = ?", (draft_id,))
+        cursor = self.db.execute(
+            "INSERT INTO drafts (id, ts, chat_id, label, text, reply_to, context) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (draft_id, time.time(), chat_id, label, text, reply_to, context),
+        )
+        return cursor.lastrowid
+
+    def get_draft(self, draft_id: int) -> Draft | None:
+        row = self.db.execute(
+            "SELECT id, chat_id, label, text, reply_to, context FROM drafts WHERE id = ?", (draft_id,),
+        ).fetchone()
+        return Draft(*row) if row else None
+
+    def drop_draft(self, draft_id: int) -> None:
+        self.db.execute("DELETE FROM drafts WHERE id = ?", (draft_id,))
 
     # Tokens and money.
 

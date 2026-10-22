@@ -40,6 +40,9 @@ class Settings(BaseSettings):
     # Private chats with people I know (not strangers picked up on their own)
     # skip both daily caps. Set to false to put the caps back.
     ai_known_unlimited: bool = True
+    # The answer to a voice message or a video in an AI chat (the AI only
+    # reads text). Empty = say nothing.
+    ai_media_reply: str = "голосовые и видео сейчас не могу послушать, напиши текстом"
     # DeepSeek for chats switched to it (".model deepseek"), from
     # https://platform.deepseek.com. Empty key = only Claude.
     deepseek_api_key: str = ""

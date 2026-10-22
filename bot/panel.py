@@ -6,6 +6,9 @@ brings up actions for its author.
 
 Multi-step actions ("add an auto-reply": whom → keywords → text) keep their
 progress in memory; a restart just drops a half-done one.
+
+AI drafts come here with buttons: send, another version, edit, drop. Drafts
+themselves are kept in the journal, so their buttons work after a restart.
 """
 
 from dataclasses import dataclass, field
@@ -15,6 +18,7 @@ from telethon.errors import MessageNotModifiedError
 
 from bot import commands
 from bot.commands import Answer, Command
+from bot.journal import Draft
 from bot.store import DEEPSEEK, Store
 
 ASK_TARGET = "Для кого? Пришли @username, +телефон или перешли сюда его сообщение."
@@ -26,11 +30,12 @@ NO_FORWARD_AUTHOR = (
 
 @dataclass
 class Wizard:
-    kind: str  # "reply" | "filter" | "mute" | "del" | "ai"
+    kind: str  # "reply" | "filter" | "mute" | "del" | "ai" | "draft"
     step: str  # "target" | "keywords" | "text" | "count"
     chat_id: int | None = None
     label: str = ""
     keywords: list[str] = field(default_factory=list)
+    draft_id: int | None = None  # "draft": the draft my text replaces
 
 
 def menu_buttons():
@@ -71,8 +76,8 @@ def ai_screen(store: Store):
     )
     rows = [
         [Button.inline(
-            f"🔕 {'🆕 ' if a.auto else ''}{'🐉 ' if store.chat_models.get(c) == DEEPSEEK else ''}"
-            f"{f'{a.label} #{c}'.strip()}",
+            f"🔕 {'🆕 ' if a.auto else ''}{'📝 ' if a.drafts else ''}"
+            f"{'🐉 ' if store.chat_models.get(c) == DEEPSEEK else ''}{f'{a.label} #{c}'.strip()}",
             f"noai:{c}".encode(),
         )]
         for c, a in sorted(store.ai_chats.items())
@@ -83,7 +88,7 @@ def ai_screen(store: Store):
     )
     if rows:
         text += (
-            "\n\nСписок (🆕 — незнакомец, подхвачен сам, 🐉 — отвечает DeepSeek). "
+            "\n\nСписок (🆕 — незнакомец, подхвачен сам, 📝 — только черновики, 🐉 — отвечает DeepSeek). "
             "Кнопка убирает из списка навсегда."
         )
     text += (
@@ -108,7 +113,10 @@ def person_screen(store: Store, chat_id: int, label: str, deepseek_available: bo
     )
     on_deepseek = store.chat_models.get(chat_id) == DEEPSEEK
     rules = [r for r in store.rules if r.chat_id == chat_id]
+    ai_chat = store.ai_chats.get(chat_id)
     text = f"{label or chat_id} #{chat_id}"
+    if ai_chat is not None and ai_chat.drafts:
+        text += "\nИИ не отвечает ему сам, а присылает сюда черновики 📝"
     if on_deepseek:
         text += "\nИИ отвечает ему через DeepSeek 🐉"
     if chat_id in store.chat_personas:
@@ -121,14 +129,33 @@ def person_screen(store: Store, chat_id: int, label: str, deepseek_available: bo
         model = [[Button.inline("🧠 Вернуть Claude", f"model:{chat_id}:claude".encode())]]
     elif deepseek_available:
         model = [[Button.inline("🐉 Отвечать через DeepSeek", f"model:{chat_id}:deepseek".encode())]]
+    mode = []
+    if ai_chat is not None and ai_chat.drafts:
+        mode = [[Button.inline("🤖 Пусть отвечает сам", f"aimode:{chat_id}:auto".encode())]]
+    elif ai_chat is not None:
+        mode = [[Button.inline("📝 Только черновики", f"aimode:{chat_id}:draft".encode())]]
     return text, [
         [mute, Button.inline("🗑 Удалить последние", f"act:del:{chat_id}".encode())],
         [Button.inline("💬 Автоответ ему", f"act:reply:{chat_id}".encode()),
          Button.inline("🚫 Фильтр слов", f"act:filter:{chat_id}".encode())],
         [ai, Button.inline("✍️ Ответить ИИ", f"ans:{chat_id}".encode())],
-        [Button.inline("♻️ Сбросить лимит ИИ", f"reset:{chat_id}".encode())],
+        [Button.inline("📝 Черновик ИИ", f"draftnow:{chat_id}".encode()),
+         Button.inline("♻️ Сбросить лимит ИИ", f"reset:{chat_id}".encode())],
+        *mode,
         *model,
         BACK,
+    ]
+
+
+def draft_screen(draft: Draft, warning: str | None = None):
+    text = f"📝 Черновик для {draft.label or draft.chat_id} #{draft.chat_id} (прочитал {draft.context} сообщ.):\n\n{draft.text}"
+    if warning:
+        text += f"\n\n⚠️ Ответ {warning}: проверь, прежде чем отправлять"
+    return text, [
+        [Button.inline("✅ Отправить", f"dsend:{draft.id}".encode()),
+         Button.inline("🔄 Другой вариант", f"dredo:{draft.id}".encode())],
+        [Button.inline("✏️ Править", f"dedit:{draft.id}".encode()),
+         Button.inline("✖️ Не надо", f"ddrop:{draft.id}".encode())],
     ]
 
 
@@ -267,6 +294,42 @@ def setup(bot: TelegramClient, assistant, store: Store, owner_id: int) -> None:
             label = labels.get(chat_id) or await assistant.label_for(chat_id)
             answer = assistant.answer_with_ai(chat_id, label)
             await event.answer(answer.text, alert=answer.is_error)
+        elif name == "draftnow":
+            chat_id = int(arg)
+            label = labels.get(chat_id) or await assistant.label_for(chat_id)
+            answer = assistant.answer_with_ai(chat_id, label, draft=True)
+            await event.answer(answer.text, alert=answer.is_error)
+        elif name == "aimode":
+            chat, _, mode = arg.partition(":")
+            chat_id = int(chat)
+            store.set_drafts(chat_id, mode == "draft")
+            await event.answer("ИИ присылает черновики" if mode == "draft" else "ИИ отвечает сам")
+            label = labels.get(chat_id) or await assistant.label_for(chat_id)
+            await edit(event, person_screen(store, chat_id, label, assistant.deepseek_available))
+        elif name in ("dsend", "dredo", "dedit", "ddrop"):
+            draft = assistant.draft(int(arg))
+            if draft is None:
+                await event.answer("Этого черновика уже нет", alert=True)
+                await event.edit(buttons=None)
+            elif name == "dsend":
+                answer = await assistant.send_draft(draft.id)
+                await event.answer(answer.text, alert=answer.is_error)
+                if not answer.is_error:
+                    await event.edit(f"✅ {answer.text}:\n\n{draft.text}", buttons=None, parse_mode=None)
+            elif name == "dredo":
+                answer = assistant.redraft(draft.id)
+                await event.answer(answer.text, alert=answer.is_error)
+                if not answer.is_error:
+                    await event.delete()  # the new version comes as a new message
+            elif name == "dedit":
+                wizard = Wizard("draft", "text", draft.chat_id, draft.label, draft_id=draft.id)
+                await event.answer()
+                await event.reply(
+                    f"Пришли свой текст, отправлю его {draft.label or draft.chat_id} как есть:", buttons=[CANCEL],
+                )
+            else:
+                assistant.journal.drop_draft(draft.id)
+                await event.edit(f"✖️ Черновик отброшен:\n\n{draft.text}", buttons=None, parse_mode=None)
         elif name == "model":
             chat, _, model = arg.partition(":")
             chat_id = int(chat)
@@ -307,6 +370,13 @@ def setup(bot: TelegramClient, assistant, store: Store, owner_id: int) -> None:
             else:
                 wizard = None
                 await reply(event, person_screen(store, chat_id, label, assistant.deepseek_available))
+            return
+
+        if wizard is not None and wizard.kind == "draft" and text:
+            # My edited version of a draft: goes out as typed, even with a dot first.
+            w, wizard = wizard, None
+            answer = await assistant.send_draft(w.draft_id, msg.raw_text)
+            await reply(event, finish(answer))
             return
 
         cmd = commands.parse(text)
