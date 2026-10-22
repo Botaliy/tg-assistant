@@ -1,8 +1,14 @@
-"""Commands I type from my own account, e.g. ".mute" or ".reply цена => ...".
+"""Commands I type from my own account, e.g. ".mute @vasya" or ".reply цена => ...".
 
-Typed in a chat, a command acts on that chat; typed in Saved Messages, rules
-apply to every private chat. Everything here is pure — the Telegram side
-(deleting messages, sending answers) lives in bot.main.
+They're meant for the control chat — a private group the bot creates for
+itself — and name the chat they act on with @username. Without a target,
+.reply/.filter/.rules work on every private chat.
+
+Typed right in a conversation, a command acts on that conversation and is
+deleted silently: no confirmation, only errors and requested output (.rules,
+.help) go to the control chat. ".del" is the one meant for conversations.
+
+Everything here is pure — the Telegram side lives in bot.main.
 """
 
 from dataclasses import dataclass
@@ -12,26 +18,40 @@ from bot.store import Store
 
 PREFIX = "."
 NAMES = {"help", "del", "mute", "unmute", "reply", "filter", "rules", "unrule"}
+# Answers to these are what was asked for, not a confirmation, so they're
+# sent to the control chat even when the command was typed in a conversation.
+OUTPUT_COMMANDS = {"help", "rules"}
 
-HELP = """Команды (пишутся от тебя, начинаются с точки):
+HELP = """Команды (пишутся от тебя, начинаются с точки).
 
-.del — ответом на сообщение: удалить его у обоих
-.del N — удалить последние N сообщений собеседника в этом чате
-.mute / .unmute — удалять все новые сообщения в этом чате / перестать
-
-.reply ключ1, ключ2 => ответ — автоответ на сообщения с этими словами
-.filter ключ1, ключ2 — удалять сообщения с этими словами
-.rules — список правил
+Здесь, в служебном чате:
+.mute @user / .unmute @user — удалять все новые сообщения от него / перестать
+.reply ключ1, ключ2 => ответ — автоответ во всех личках
+.reply @user ключ1, ключ2 => ответ — автоответ только ему
+.filter [@user] ключ1, ключ2 — удалять сообщения с этими словами
+.del @user N — удалить его последние N сообщений
+.rules [@user] — список правил
 .unrule N — удалить правило N
+Вместо @user можно +телефон из контактов или #id из .rules.
 
-В чате .reply и .filter действуют только на этот чат,
-в «Избранном» — на все личные чаты."""
+В переписке:
+.del — ответом на сообщение: удалить его у обоих
+.del N — удалить последние N сообщений собеседника
+Остальные команды там тоже работают (без @user, для этого чата),
+но удаляются молча, без подтверждения."""
 
 
 @dataclass
 class Command:
     name: str
     arg: str
+    target: str | None = None  # as typed: "@username", "+phone" or "#chat_id"
+
+
+@dataclass
+class Answer:
+    text: str
+    is_error: bool = False
 
 
 def parse(text: str) -> Command | None:
@@ -41,7 +61,21 @@ def parse(text: str) -> Command | None:
     name = name.strip().lower()
     if name not in NAMES:
         return None
+    first, _, rest = arg.strip().partition(" ")
+    if is_target(first):
+        return Command(name=name, arg=rest.strip(), target=first)
     return Command(name=name, arg=arg.strip())
+
+
+def is_target(token: str) -> bool:
+    """@username, +phone (from contacts) or #chat_id (as .rules shows it)."""
+    if len(token) < 2:
+        return False
+    if token[0] == "@":
+        return True
+    if token[0] in "+#":
+        return token[1:].lstrip("-").isdigit()
+    return False
 
 
 def split_keywords(raw: str) -> list[str]:
@@ -57,62 +91,70 @@ def parse_del_count(arg: str) -> int | None:
     return min(int(arg), 100)
 
 
-def execute(store: Store, cmd: Command, chat_id: int | None) -> str:
-    """Runs a rule/mute command. chat_id is None when typed in Saved Messages."""
-    scope = "во всех личных чатах" if chat_id is None else "в этом чате"
+def error(text: str) -> Answer:
+    return Answer(text, is_error=True)
+
+
+def execute(store: Store, cmd: Command, chat_id: int | None, label: str = "") -> Answer:
+    """Runs a rule/mute command against chat_id (None: every private chat).
+
+    label is how to call that chat in answers and in .rules, e.g. "@vasya".
+    """
+    scope = "во всех личках" if chat_id is None else f"для {label or chat_id}"
 
     if cmd.name == "help":
-        return HELP
+        return Answer(HELP)
 
     if cmd.name in ("mute", "unmute"):
         if chat_id is None:
-            return f".{cmd.name} пишется в том чате, который нужно заглушить"
+            return error(f"Кого? Формат: .{cmd.name} @user")
         muted = cmd.name == "mute"
-        changed = store.set_muted(chat_id, muted)
+        changed = store.set_muted(chat_id, muted, label)
         if muted:
-            return "Удаляю все новые сообщения в этом чате" if changed else "Чат уже заглушён"
-        return "Больше не удаляю сообщения в этом чате" if changed else "Чат и не был заглушён"
+            return Answer(f"Удаляю все новые сообщения {scope}" if changed else f"{label} уже заглушён")
+        return Answer(f"Больше не удаляю сообщения {scope}" if changed else f"{label} и не был заглушён")
 
     if cmd.name == "reply":
         keys, sep, answer = cmd.arg.partition("=>")
         keywords, answer = split_keywords(keys), answer.strip()
         if not sep or not keywords or not answer:
-            return "Формат: .reply ключ1, ключ2 => ответ"
-        rule = store.add_rule(REPLY, keywords, answer, chat_id)
-        return f"Правило {rule.id}: отвечаю {scope} на «{', '.join(keywords)}»"
+            return error("Формат: .reply [@user] ключ1, ключ2 => ответ")
+        rule = store.add_rule(REPLY, keywords, answer, chat_id, label)
+        return Answer(f"Правило {rule.id}: отвечаю {scope} на «{', '.join(keywords)}»")
 
     if cmd.name == "filter":
         keywords = split_keywords(cmd.arg)
         if not keywords:
-            return "Формат: .filter ключ1, ключ2"
-        rule = store.add_rule(DELETE, keywords, chat_id=chat_id)
-        return f"Правило {rule.id}: удаляю {scope} сообщения с «{', '.join(keywords)}»"
+            return error("Формат: .filter [@user] ключ1, ключ2")
+        rule = store.add_rule(DELETE, keywords, chat_id=chat_id, chat_label=label)
+        return Answer(f"Правило {rule.id}: удаляю {scope} сообщения с «{', '.join(keywords)}»")
 
     if cmd.name == "rules":
-        return format_rules(store, chat_id)
+        return Answer(format_rules(store, chat_id))
 
     if cmd.name == "unrule":
         if not cmd.arg.isdigit():
-            return "Формат: .unrule N (номер из .rules)"
+            return error("Формат: .unrule N (номер из .rules)")
         if store.remove_rule(int(cmd.arg)):
-            return f"Правило {cmd.arg} удалено"
-        return f"Правила {cmd.arg} нет"
+            return Answer(f"Правило {cmd.arg} удалено")
+        return error(f"Правила {cmd.arg} нет")
 
     raise ValueError(f"Unhandled command: {cmd.name}")
 
 
 def format_rules(store: Store, chat_id: int | None) -> str:
-    # From Saved Messages show everything; from a chat — what applies there.
+    # Without a target show everything; for a chat — what applies there.
     rules = [r for r in store.rules if chat_id is None or r.chat_id in (None, chat_id)]
     lines = []
     for r in rules:
-        where = "все лички" if r.chat_id is None else f"чат {r.chat_id}"
+        where = "все лички" if r.chat_id is None else f"{r.chat_label} #{r.chat_id}".strip()
         keys = ", ".join(r.keywords)
-        if r.kind == REPLY:
-            lines.append(f"{r.id}. [{where}] «{keys}» → {r.text}")
-        else:
-            lines.append(f"{r.id}. [{where}] «{keys}» → удалить")
-    muted = store.muted if chat_id is None else store.muted & {chat_id}
+        action = r.text if r.kind == REPLY else "удалить"
+        lines.append(f"{r.id}. [{where}] «{keys}» → {action}")
+    muted = [
+        f"{label} #{c}".strip() for c, label in sorted(store.muted.items())
+        if chat_id is None or c == chat_id
+    ]
     if muted:
-        lines.append("Заглушены: " + ", ".join(str(c) for c in sorted(muted)))
+        lines.append("Заглушены: " + ", ".join(muted))
     return "\n".join(lines) or "Правил пока нет"

@@ -16,7 +16,8 @@ class Rule:
     # None means "every private chat"; otherwise the rule works only in that
     # one chat (which may also be a group).
     chat_id: int | None = None
-    _patterns: list[re.Pattern] = field(default=None, init=False, repr=False, compare=False)
+    chat_label: str = ""  # e.g. "@vasya", only for showing in .rules
+    _patterns: list[re.Pattern] | None = field(default=None, init=False, repr=False, compare=False)
 
     def matches(self, message: str) -> bool:
         if self._patterns is None:
@@ -39,6 +40,7 @@ class Rule:
             "keywords": self.keywords,
             "text": self.text,
             "chat_id": self.chat_id,
+            "chat_label": self.chat_label,
         }
 
 

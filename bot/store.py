@@ -5,21 +5,29 @@ from bot.rules import DELETE, REPLY, Rule
 
 
 class Store:
-    """Rules and muted chats, kept in one small JSON file."""
+    """Rules, muted chats and the control chat id, kept in one small JSON file."""
 
     def __init__(self, path: Path):
         self.path = path
         self.rules: list[Rule] = []
-        self.muted: set[int] = set()
+        self.muted: dict[int, str] = {}  # chat id -> label for .rules
+        self.control_chat_id: int | None = None
         self._next_id = 1
         if path.exists():
             data = json.loads(path.read_text(encoding="utf-8"))
             self.rules = [Rule(**r) for r in data.get("rules", [])]
-            self.muted = set(data.get("muted", []))
+            self.muted = {int(c): label for c, label in data.get("muted", {}).items()}
+            self.control_chat_id = data.get("control_chat_id")
             self._next_id = data.get("next_id", 1)
 
-    def add_rule(self, kind: str, keywords: list[str], text: str = "", chat_id: int | None = None) -> Rule:
-        rule = Rule(id=self._next_id, kind=kind, keywords=keywords, text=text, chat_id=chat_id)
+    def add_rule(
+        self, kind: str, keywords: list[str], text: str = "",
+        chat_id: int | None = None, chat_label: str = "",
+    ) -> Rule:
+        rule = Rule(
+            id=self._next_id, kind=kind, keywords=keywords, text=text,
+            chat_id=chat_id, chat_label=chat_label,
+        )
         self._next_id += 1
         self.rules.append(rule)
         self.save()
@@ -33,16 +41,20 @@ class Store:
         self.save()
         return True
 
-    def set_muted(self, chat_id: int, muted: bool) -> bool:
+    def set_muted(self, chat_id: int, muted: bool, label: str = "") -> bool:
         """Returns False if the chat was already in that state."""
         if (chat_id in self.muted) == muted:
             return False
         if muted:
-            self.muted.add(chat_id)
+            self.muted[chat_id] = label
         else:
-            self.muted.discard(chat_id)
+            del self.muted[chat_id]
         self.save()
         return True
+
+    def set_control_chat(self, chat_id: int) -> None:
+        self.control_chat_id = chat_id
+        self.save()
 
     def should_delete(self, chat_id: int, is_private: bool, message: str) -> bool:
         if chat_id in self.muted:
@@ -64,8 +76,9 @@ class Store:
     def save(self) -> None:
         data = {
             "next_id": self._next_id,
+            "control_chat_id": self.control_chat_id,
             "rules": [r.to_dict() for r in self.rules],
-            "muted": sorted(self.muted),
+            "muted": {str(c): label for c, label in sorted(self.muted.items())},
         }
         tmp = self.path.with_suffix(".tmp")
         tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
