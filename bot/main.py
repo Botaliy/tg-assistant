@@ -119,6 +119,13 @@ class Assistant:
             if chat_id is None:
                 return error("Кому? Формат: .ans @user")
             return self.answer_with_ai(chat_id, label, None if cmd.target else reply_to)
+        if cmd.name == "reset":
+            if chat_id is None:
+                return error("Кому? Формат: .reset @user")
+            if self.ai is None:
+                return error(commands.NO_AI)
+            self.ai.reset_limit(chat_id)
+            return Answer(f"Лимит ИИ для {label or chat_id} сброшен")
         if cmd.name == "ai" and not self.ai_available:
             return error(commands.NO_AI)
         return commands.execute(self.store, cmd, chat_id, label)

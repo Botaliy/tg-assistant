@@ -267,6 +267,16 @@ class AiResponder:
                 self._rerun.discard(chat_id)
                 self._schedule(chat_id)
 
+    def reset_limit(self, chat_id: int) -> None:
+        """Lets a chat start today's AI reply count over; a stranger also gets
+        a fresh set of replies."""
+        self._per_chat.pop(chat_id, None)
+        self._limit_notified.discard(chat_id)
+        chat = self.store.ai_chats.get(chat_id)
+        if chat is not None and chat.replies:
+            chat.replies = 0
+            self.store.save()
+
     def _label(self, chat_id: int) -> str:
         chat = self.store.ai_chats.get(chat_id)
         return (chat.label if chat else "") or str(chat_id)
@@ -320,13 +330,29 @@ class AiResponder:
             chat = AiChat(label=manual_label or "")
         name = chat.label or str(chat_id)
 
-        history = [m async for m in self.client.iter_messages(chat_id, limit=CONTEXT_MESSAGES)]
-        history.reverse()
-        history = [(m, text) for m in history if (text := describe(m))]
-        if not history or history[-1][0].out:
-            if manual:
-                await self.notify(f"{name}: последнее сообщение твоё, ИИ не на что отвечать")
-            return
+        if manual:
+            # Answer the other side: up to the message ".ans" replied to, and
+            # past whatever I wrote after their last message.
+            history = [
+                m async for m in self.client.iter_messages(
+                    chat_id, limit=CONTEXT_MESSAGES + 10, max_id=(reply_to + 1) if reply_to else 0,
+                )
+            ]
+            history.reverse()
+            history = [(m, text) for m in history if (text := describe(m))]
+            while history and history[-1][0].out:
+                history.pop()
+            history = history[-CONTEXT_MESSAGES:]
+            if not history:
+                await self.notify(f"{name}: нет сообщений собеседника, ИИ не на что отвечать")
+                return
+            reply_to = history[-1][0].id
+        else:
+            history = [m async for m in self.client.iter_messages(chat_id, limit=CONTEXT_MESSAGES)]
+            history.reverse()
+            history = [(m, text) for m in history if (text := describe(m))]
+            if not history or history[-1][0].out:
+                return  # the last word is already mine
         if not await self._within_limits(chat_id):
             return
 
@@ -357,15 +383,17 @@ class AiResponder:
                 if text.startswith(f"{speaker}:"):
                     text = text[len(speaker) + 1:].strip()
 
-        # Things may have changed while Claude was thinking.
-        if not manual and (chat_id not in self.store.ai_chats or not self.store.ai_enabled):
-            return
-        newest = await self._newest(chat_id)
-        if newest is not None and newest.out:
-            return  # I answered myself meanwhile
-        if newest is not None and newest.id > history[-1][0].id:
-            self._rerun.add(chat_id)  # they wrote more meanwhile: answer with it in view
-            return
+        # Things may have changed while Claude was thinking. (A one-off answer
+        # I asked for goes out regardless: it replies to a specific message.)
+        if not manual:
+            if chat_id not in self.store.ai_chats or not self.store.ai_enabled:
+                return
+            newest = await self._newest(chat_id)
+            if newest is not None and newest.out:
+                return  # I answered myself meanwhile
+            if newest is not None and newest.id > history[-1][0].id:
+                self._rerun.add(chat_id)  # they wrote more meanwhile: answer with it in view
+                return
 
         if not text or text == SKIP:
             log.info("AI chose not to answer in %s", chat_id)

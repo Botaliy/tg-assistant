@@ -109,6 +109,7 @@ def person_screen(store: Store, chat_id: int, label: str):
         [Button.inline("💬 Автоответ ему", f"act:reply:{chat_id}".encode()),
          Button.inline("🚫 Фильтр слов", f"act:filter:{chat_id}".encode())],
         [ai, Button.inline("✍️ Ответить ИИ", f"ans:{chat_id}".encode())],
+        [Button.inline("♻️ Сбросить лимит ИИ", f"reset:{chat_id}".encode())],
         BACK,
     ]
 
@@ -235,6 +236,12 @@ def setup(bot: TelegramClient, assistant, store: Store, owner_id: int) -> None:
                 return
             wizard.chat_id, wizard.label = None, ""
             await edit(event, advance(None))
+        elif name == "reset":
+            if assistant.ai is None:
+                await event.answer(commands.NO_AI, alert=True)
+                return
+            assistant.ai.reset_limit(int(arg))
+            await event.answer("Лимит ИИ сброшен")
         elif name == "ans":
             chat_id = int(arg)
             label = labels.get(chat_id) or await assistant.label_for(chat_id)

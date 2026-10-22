@@ -18,7 +18,7 @@ from bot.rules import DELETE, REPLY
 from bot.store import Store
 
 PREFIX = "."
-NAMES = {"help", "del", "mute", "unmute", "reply", "filter", "rules", "unrule", "ai", "noai", "persona", "ans"}
+NAMES = {"help", "del", "mute", "unmute", "reply", "filter", "rules", "unrule", "ai", "noai", "persona", "ans", "reset"}
 NO_AI = "ИИ выключен: впиши ANTHROPIC_API_KEY в .env на сервере и перезапусти бота"
 # Answers to these are what was asked for, not a confirmation, so they're
 # sent to the panel even when the command was typed in a conversation.
@@ -38,6 +38,7 @@ HELP = """Всё есть на кнопках в /menu. Перешли сюда 
 .ai @user / .noai @user — добавить в список ИИ / убрать (и не подхватывать сам)
 .ai в группе — ИИ отвечает там, когда тебя упомянут или ответят тебе
 .ans @user — ИИ разово отвечает ему, даже если ИИ для него выключен
+.reset @user — сбросить ему дневной лимит ответов ИИ (незнакомцу — и общий)
 .persona текст — общий характер ИИ (без текста — показать, «-» — сбросить)
 .persona @user текст — характер ИИ с ним, важнее общего
 Вместо @user можно +телефон из контактов или #id из .rules.
