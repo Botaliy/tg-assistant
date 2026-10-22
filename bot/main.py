@@ -244,7 +244,8 @@ async def run() -> None:
             settings.ai_model, settings.ai_effort, settings.ai_daily_per_chat,
             settings.ai_daily_total, settings.ai_stranger_limit, utils.get_display_name(me), notify,
             known_unlimited=settings.ai_known_unlimited,
-            deepseek=DeepSeek(settings.deepseek_api_key, settings.deepseek_model) if settings.deepseek_api_key else None,
+            deepseek=DeepSeek(settings.deepseek_api_key, settings.deepseek_model, settings.deepseek_effort)
+            if settings.deepseek_api_key else None,
         )
     setup_userbot(
         client, assistant, store, Cooldown(settings.reply_cooldown_seconds), notify, bot_me.id, ai,
@@ -262,7 +263,7 @@ async def run() -> None:
         bot_me.username, settings.ai_model if ai else "off",
     )
     if ai is not None and ai.deepseek is not None:
-        log.info("DeepSeek on: %s", settings.deepseek_model)
+        log.info("DeepSeek on: %s, effort %s", settings.deepseek_model, settings.deepseek_effort or "default")
     await asyncio.gather(client.run_until_disconnected(), bot.run_until_disconnected())
 
 

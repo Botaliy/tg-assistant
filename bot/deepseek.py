@@ -16,22 +16,27 @@ class DeepSeekError(Exception):
 
 
 class DeepSeek:
-    def __init__(self, api_key: str, model: str):
+    def __init__(self, api_key: str, model: str, effort: str = ""):
         self.model = model
+        self.effort = effort
         self._http = httpx.AsyncClient(
             headers={"Authorization": f"Bearer {api_key}"}, timeout=httpx.Timeout(60, connect=10),
         )
 
     async def ask(self, system: str, messages: list[dict]) -> str | None:
         """The reply text; None when DeepSeek's own filter declined."""
+        body = {
+            "model": self.model,
+            "messages": [{"role": "system", "content": system}, *messages],
+            # Thinking counts towards it too: room for that plus a short reply.
+            "max_tokens": 4000,
+            # DeepSeek's suggestion for conversation: livelier than the default.
+            "temperature": 1.3,
+        }
+        if self.effort:
+            body["reasoning_effort"] = self.effort
         try:
-            response = await self._http.post(URL, json={
-                "model": self.model,
-                "messages": [{"role": "system", "content": system}, *messages],
-                "max_tokens": 400,
-                # DeepSeek's suggestion for conversation: livelier than the default.
-                "temperature": 1.3,
-            })
+            response = await self._http.post(URL, json=body)
         except httpx.HTTPError as e:
             raise DeepSeekError(str(e) or type(e).__name__) from e
         if response.status_code != 200:

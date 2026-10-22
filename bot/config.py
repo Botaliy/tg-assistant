@@ -43,7 +43,11 @@ class Settings(BaseSettings):
     # DeepSeek for chats switched to it (".model deepseek"), from
     # https://platform.deepseek.com. Empty key = only Claude.
     deepseek_api_key: str = ""
-    deepseek_model: str = "deepseek-chat"
+    # "deepseek-chat" is an old alias for deepseek-flash with thinking off,
+    # the weakest option. deepseek-v4-pro thinks first and writes much better.
+    deepseek_model: str = "deepseek-v4-pro"
+    # low | high | max; empty = the model's default (high).
+    deepseek_effort: str = "high"
 
     @property
     def data_path(self) -> Path:

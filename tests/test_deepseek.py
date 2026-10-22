@@ -29,6 +29,20 @@ def test_sends_system_first_and_returns_the_text():
     assert seen["auth"] == "Bearer key"
     assert seen["body"]["model"] == "deepseek-chat"
     assert seen["body"]["messages"][0] == {"role": "system", "content": "будь дерзким"}
+    assert "reasoning_effort" not in seen["body"]
+
+
+def test_passes_effort_when_set():
+    seen = {}
+
+    def handler(request):
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"choices": [{"message": {"content": "ок"}, "finish_reason": "stop"}]})
+
+    deepseek = client(handler)
+    deepseek.effort = "high"
+    ask(deepseek)
+    assert seen["body"]["reasoning_effort"] == "high"
 
 
 def test_content_filter_is_a_refusal():
