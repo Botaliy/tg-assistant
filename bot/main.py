@@ -236,6 +236,7 @@ async def run() -> None:
             client, store, anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key),
             settings.ai_model, settings.ai_effort, settings.ai_daily_per_chat,
             settings.ai_daily_total, settings.ai_stranger_limit, utils.get_display_name(me), notify,
+            known_unlimited=settings.ai_known_unlimited,
         )
     setup_userbot(
         client, assistant, store, Cooldown(settings.reply_cooldown_seconds), notify, bot_me.id, ai,

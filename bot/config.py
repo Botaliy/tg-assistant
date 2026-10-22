@@ -37,6 +37,9 @@ class Settings(BaseSettings):
     # A stranger gets at most this many AI replies, ever; then the AI hands
     # the chat over to me with a report.
     ai_stranger_limit: int = 10
+    # Private chats with people I know (not strangers picked up on their own)
+    # skip both daily caps. Set to false to put the caps back.
+    ai_known_unlimited: bool = True
 
     @property
     def data_path(self) -> Path:

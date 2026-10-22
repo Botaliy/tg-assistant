@@ -13,7 +13,8 @@ Safety lives in code, not just the prompt:
   the panel instead; the userbot also never runs the AI's messages as commands.
 - Telegram's service account (login codes) is never treated as a stranger.
 - Per-chat and total daily limits cap the spend, and a stranger gets a fixed
-  number of replies, ever; then the AI hands the chat over to me.
+  number of replies, ever; then the AI hands the chat over to me. Private
+  chats with people I know can be let off the daily limits (known_unlimited).
 - If I write in an automatic chat myself, the AI steps out of it for good.
 
 Besides, I can ask for a one-off answer in any chat (".ans"), whether or not
@@ -137,7 +138,7 @@ class AiResponder:
     def __init__(
         self, client: TelegramClient, store: Store, api: anthropic.AsyncAnthropic,
         model: str, effort: str, per_chat_limit: int, total_limit: int, stranger_limit: int,
-        me_name: str, notify: Callable[[str], Awaitable[None]],
+        me_name: str, notify: Callable[[str], Awaitable[None]], known_unlimited: bool = False,
     ):
         self.client = client
         self.store = store
@@ -147,6 +148,8 @@ class AiResponder:
         self.per_chat_limit = per_chat_limit
         self.total_limit = total_limit
         self.stranger_limit = stranger_limit
+        # Private chats that aren't an automatic stranger skip the daily limits.
+        self.known_unlimited = known_unlimited
         self.me_name = me_name
         self.notify = notify
         # Waiting out REPLY_DELAY_SECONDS; a new message restarts the wait.
@@ -353,7 +356,10 @@ class AiResponder:
             history = [(m, text) for m in history if (text := describe(m))]
             if not history or history[-1][0].out:
                 return  # the last word is already mine
-        if not await self._within_limits(chat_id):
+        # Someone I know, in a private chat: no daily limits, and their replies
+        # don't eat into the total left for everyone else.
+        unlimited = self.known_unlimited and chat_id > 0 and not chat.auto
+        if not unlimited and not await self._within_limits(chat_id):
             return
 
         group = chat_id < 0
@@ -373,8 +379,9 @@ class AiResponder:
             me=clean_label(self.me_name), partner=clean_label(chat.label), skip=SKIP,
             stranger=STRANGER if chat.auto else "", style=self._style(chat_id),
         )
-        self._per_chat[chat_id] = self._per_chat.get(chat_id, 0) + 1
-        self._total += 1
+        if not unlimited:
+            self._per_chat[chat_id] = self._per_chat.get(chat_id, 0) + 1
+            self._total += 1
         async with self.client.action(chat_id, "typing"):
             text = (await self._ask(system, messages) or "").strip()
         if group:
