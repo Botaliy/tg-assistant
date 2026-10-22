@@ -26,6 +26,12 @@ class Settings(BaseSettings):
     # seconds, so a chatty interlocutor doesn't get the canned answer 10 times.
     reply_cooldown_seconds: int = 600
 
+    # AI chats (".ai @user"): Claude answers for me. Empty key = turned off.
+    anthropic_api_key: str = ""
+    ai_model: str = "claude-opus-5-5"
+    # low | medium | high | xhigh | max. Chat replies don't need deep thinking.
+    ai_effort: str = "low"
+
     @property
     def data_path(self) -> Path:
         path = (BASE_DIR / self.data_dir).resolve()

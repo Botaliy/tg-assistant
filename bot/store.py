@@ -1,11 +1,25 @@
 import json
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from bot.rules import DELETE, REPLY, Rule
 
 
+@dataclass
+class AiChat:
+    """A chat where Claude answers for me.
+
+    Messages up to summarized_up_to are folded into `summary`; the ones after
+    it are sent to the model verbatim.
+    """
+
+    label: str = ""
+    summary: str = ""
+    summarized_up_to: int = 0
+
+
 class Store:
-    """Rules and muted chats, kept in one small JSON file."""
+    """Rules, muted chats and AI chats, kept in one small JSON file."""
 
     def __init__(self, path: Path):
         self.path = path
@@ -13,12 +27,17 @@ class Store:
         self.muted: dict[int, str] = {}  # chat id -> label for .rules
         # Whether the userbot has already pressed /start in the panel bot for me.
         self.panel_started = False
+        self.ai_chats: dict[int, AiChat] = {}
+        # How Claude should sound in AI chats: set by ".persona", empty = default.
+        self.persona = ""
         self._next_id = 1
         if path.exists():
             data = json.loads(path.read_text(encoding="utf-8"))
             self.rules = [Rule(**r) for r in data.get("rules", [])]
             self.muted = {int(c): label for c, label in data.get("muted", {}).items()}
             self.panel_started = data.get("panel_started", False)
+            self.ai_chats = {int(c): AiChat(**a) for c, a in data.get("ai_chats", {}).items()}
+            self.persona = data.get("persona", "")
             self._next_id = data.get("next_id", 1)
 
     def add_rule(
@@ -53,6 +72,21 @@ class Store:
         self.save()
         return True
 
+    def set_ai(self, chat_id: int, on: bool, label: str = "") -> bool:
+        """Returns False if the chat was already in that state."""
+        if (chat_id in self.ai_chats) == on:
+            return False
+        if on:
+            self.ai_chats[chat_id] = AiChat(label=label)
+        else:
+            del self.ai_chats[chat_id]
+        self.save()
+        return True
+
+    def set_persona(self, persona: str) -> None:
+        self.persona = persona
+        self.save()
+
     def set_panel_started(self) -> None:
         self.panel_started = True
         self.save()
@@ -80,6 +114,8 @@ class Store:
             "panel_started": self.panel_started,
             "rules": [r.to_dict() for r in self.rules],
             "muted": {str(c): label for c, label in sorted(self.muted.items())},
+            "ai_chats": {str(c): asdict(a) for c, a in sorted(self.ai_chats.items())},
+            "persona": self.persona,
         }
         tmp = self.path.with_suffix(".tmp")
         tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")

@@ -6,6 +6,7 @@ requires-python = ">=3.11"
 dependencies = [
     "telethon>=1.45",
     "pydantic-settings>=2.6",
+    "anthropic>=1.0",
 ]
 
 [dependency-groups]

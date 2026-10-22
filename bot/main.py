@@ -4,6 +4,7 @@ deletes messages and auto-replies — and the panel bot is how I control it."""
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
+from typing import TYPE_CHECKING
 
 from telethon import TelegramClient, events, utils
 from telethon.errors import RPCError
@@ -14,7 +15,11 @@ from bot.config import Settings, get_settings
 from bot.rules import Cooldown
 from bot.store import Store
 
+if TYPE_CHECKING:
+    from bot.ai import AiResponder
+
 log = logging.getLogger("tg-assistant")
+
 
 
 def build_client(settings: Settings) -> TelegramClient:
@@ -24,9 +29,10 @@ def build_client(settings: Settings) -> TelegramClient:
 class Assistant:
     """What the userbot can do for me; used by both the userbot and the panel."""
 
-    def __init__(self, client: TelegramClient, store: Store):
+    def __init__(self, client: TelegramClient, store: Store, ai_available: bool):
         self.client = client
         self.store = store
+        self.ai_available = ai_available
 
     async def delete(self, chat_id: int, ids: list[int]) -> bool:
         # revoke=True removes the messages for the other side too. In groups
@@ -97,12 +103,15 @@ class Assistant:
             if chat_id is None or count is None:
                 return error("Формат: .del @user N")
             return await self.delete_last(chat_id, count, label)
+        if cmd.name == "ai" and not self.ai_available:
+            return error(commands.NO_AI)
         return commands.execute(self.store, cmd, chat_id, label)
 
 
 def setup_userbot(
     client: TelegramClient, assistant: Assistant, store: Store,
     cooldown: Cooldown, notify: Callable[[str], Awaitable[None]], panel_id: int,
+    ai: "AiResponder | None",
 ) -> None:
     @client.on(events.NewMessage(outgoing=True))
     async def on_command(event) -> None:
@@ -151,13 +160,16 @@ def setup_userbot(
             log.info("Auto-deleted message %s in %s", event.id, event.chat_id)
             return
 
-        rule = store.reply_for(event.chat_id, event.is_private, text)
-        if rule is None:
+        ai_chat = ai is not None and event.is_private and event.chat_id in store.ai_chats
+        rule = None if ai_chat else store.reply_for(event.chat_id, event.is_private, text)
+        if not ai_chat and rule is None:
             return
         sender = await event.get_sender()
         if getattr(sender, "bot", False):
             return  # two auto-responders talking to each other never ends well
-        if cooldown.ready((event.chat_id, rule.id)):
+        if ai_chat:
+            ai.on_incoming(event.chat_id)  # the AI answers instead of keyword rules
+        elif cooldown.ready((event.chat_id, rule.id)):
             await event.reply(rule.text)
             log.info("Auto-replied in %s by rule %s", event.chat_id, rule.id)
 
@@ -176,7 +188,7 @@ async def run() -> None:
     await bot.start(bot_token=settings.bot_token)
     bot_me = await bot.get_me()
 
-    assistant = Assistant(client, store)
+    assistant = Assistant(client, store, ai_available=bool(settings.anthropic_api_key))
 
     async def notify(text: str) -> None:
         try:
@@ -184,7 +196,20 @@ async def run() -> None:
         except RPCError as e:
             log.warning("Can't reach the panel: %s", e)
 
-    setup_userbot(client, assistant, store, Cooldown(settings.reply_cooldown_seconds), notify, bot_me.id)
+    ai = None
+    if settings.anthropic_api_key:
+        # Imported only when needed: the SDK adds ~35 MB to a 60 MB process.
+        import anthropic
+
+        from bot.ai import AiResponder
+
+        ai = AiResponder(
+            client, store, anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key),
+            settings.ai_model, settings.ai_effort, utils.get_display_name(me), notify,
+        )
+    setup_userbot(
+        client, assistant, store, Cooldown(settings.reply_cooldown_seconds), notify, bot_me.id, ai,
+    )
     panel.setup(bot, assistant, store, owner_id=me.id)
 
     if not store.panel_started:
@@ -192,7 +217,10 @@ async def run() -> None:
         await client.send_message(bot_me.username, "/start")
         store.set_panel_started()
 
-    log.info("Running as %s (id %s), panel @%s", utils.get_display_name(me), me.id, bot_me.username)
+    log.info(
+        "Running as %s (id %s), panel @%s, AI %s", utils.get_display_name(me), me.id,
+        bot_me.username, settings.ai_model if ai else "off",
+    )
     await asyncio.gather(client.run_until_disconnected(), bot.run_until_disconnected())
 
 

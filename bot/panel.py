@@ -26,7 +26,7 @@ NO_FORWARD_AUTHOR = (
 
 @dataclass
 class Wizard:
-    kind: str  # "reply" | "filter" | "mute" | "del"
+    kind: str  # "reply" | "filter" | "mute" | "del" | "ai"
     step: str  # "target" | "keywords" | "text" | "count"
     chat_id: int | None = None
     label: str = ""
@@ -37,7 +37,8 @@ def menu_buttons():
     return [
         [Button.inline("📋 Правила", b"rules"), Button.inline("🔇 Заглушённые", b"muted")],
         [Button.inline("💬 Автоответ", b"new:reply"), Button.inline("🚫 Фильтр слов", b"new:filter")],
-        [Button.inline("🗑 Удалить сообщения", b"new:del"), Button.inline("❓ Справка", b"help")],
+        [Button.inline("🤖 ИИ-собеседник", b"ai"), Button.inline("🗑 Удалить сообщения", b"new:del")],
+        [Button.inline("❓ Справка", b"help")],
     ]
 
 
@@ -63,11 +64,30 @@ def muted_screen(store: Store):
     return text, rows + [[Button.inline("➕ Заглушить", b"new:mute")], BACK]
 
 
+def ai_screen(store: Store):
+    rows = [
+        [Button.inline(f"🔕 {f'{a.label} #{c}'.strip()}", f"noai:{c}".encode())]
+        for c, a in sorted(store.ai_chats.items())
+    ]
+    text = (
+        "ИИ отвечает за тебя в этих чатах. Кнопка выключает."
+        if rows else "ИИ пока ни с кем не общается."
+    )
+    text += "\n\nХарактер ответов задаётся текстом: .persona пишу коротко, на «ты», шучу"
+    if store.persona:
+        text += f"\nСейчас: {store.persona}"
+    return text, rows + [[Button.inline("➕ Включить для…", b"new:ai")], BACK]
+
+
 def person_screen(store: Store, chat_id: int, label: str):
     muted = chat_id in store.muted
     mute = (
         Button.inline("🔊 Разглушить", f"unmute:{chat_id}".encode()) if muted
         else Button.inline("🔇 Заглушить", f"act:mute:{chat_id}".encode())
+    )
+    ai = (
+        Button.inline("🔕 Выключить ИИ", f"noai:{chat_id}".encode()) if chat_id in store.ai_chats
+        else Button.inline("🤖 Включить ИИ", f"act:ai:{chat_id}".encode())
     )
     rules = [r for r in store.rules if r.chat_id == chat_id]
     text = f"{label or chat_id} #{chat_id}"
@@ -77,6 +97,7 @@ def person_screen(store: Store, chat_id: int, label: str):
         [mute, Button.inline("🗑 Удалить последние", f"act:del:{chat_id}".encode())],
         [Button.inline("💬 Автоответ ему", f"act:reply:{chat_id}".encode()),
          Button.inline("🚫 Фильтр слов", f"act:filter:{chat_id}".encode())],
+        [ai],
         BACK,
     ]
 
@@ -118,9 +139,11 @@ def setup(bot: TelegramClient, assistant, store: Store, owner_id: int) -> None:
 
         if w.step == "target":
             # The target is already filled in by the caller.
-            if w.kind == "mute":
+            if w.kind in ("mute", "ai"):
                 wizard = None
-                return finish(commands.execute(store, Command("mute", ""), w.chat_id, w.label))
+                if w.kind == "ai" and not assistant.ai_available:
+                    return finish(commands.error(commands.NO_AI))
+                return finish(commands.execute(store, Command(w.kind, ""), w.chat_id, w.label))
             if w.kind == "del":
                 w.step = "count"
                 return f"Сколько последних сообщений {w.label} удалить? (1–100)", [CANCEL]
@@ -175,6 +198,12 @@ def setup(bot: TelegramClient, assistant, store: Store, owner_id: int) -> None:
             store.remove_rule(int(arg))
             await event.answer(f"Правило {arg} удалено")
             await edit(event, rules_screen(store))
+        elif name == "ai":
+            await edit(event, ai_screen(store))
+        elif name == "noai":
+            store.set_ai(int(arg), False)
+            await event.answer("ИИ выключен")
+            await edit(event, ai_screen(store))
         elif name == "muted":
             await edit(event, muted_screen(store))
         elif name == "unmute":

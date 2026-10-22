@@ -18,10 +18,11 @@ from bot.rules import DELETE, REPLY
 from bot.store import Store
 
 PREFIX = "."
-NAMES = {"help", "del", "mute", "unmute", "reply", "filter", "rules", "unrule"}
+NAMES = {"help", "del", "mute", "unmute", "reply", "filter", "rules", "unrule", "ai", "noai", "persona"}
+NO_AI = "ИИ выключен: впиши ANTHROPIC_API_KEY в .env на сервере и перезапусти бота"
 # Answers to these are what was asked for, not a confirmation, so they're
 # sent to the panel even when the command was typed in a conversation.
-OUTPUT_COMMANDS = {"help", "rules"}
+OUTPUT_COMMANDS = {"help", "rules", "persona"}
 
 HELP = """Всё есть на кнопках в /menu. Перешли сюда сообщение человека, и появятся кнопки для него.
 
@@ -33,6 +34,8 @@ HELP = """Всё есть на кнопках в /menu. Перешли сюда 
 .del @user N — удалить его последние N сообщений
 .rules [@user] — список правил
 .unrule N — удалить правило N
+.ai @user / .noai @user — включить / выключить ИИ-собеседника для него
+.persona текст — как ИИ должен общаться от тебя (без текста — показать, «-» — сбросить)
 Вместо @user можно +телефон из контактов или #id из .rules.
 
 В переписке:
@@ -115,6 +118,21 @@ def execute(store: Store, cmd: Command, chat_id: int | None, label: str = "") ->
             return Answer(f"Удаляю все новые сообщения {scope}" if changed else f"{label} уже заглушён")
         return Answer(f"Больше не удаляю сообщения {scope}" if changed else f"{label} и не был заглушён")
 
+    if cmd.name in ("ai", "noai"):
+        if chat_id is None:
+            return error(f"Для кого? Формат: .{cmd.name} @user")
+        on = cmd.name == "ai"
+        changed = store.set_ai(chat_id, on, label)
+        if on:
+            return Answer(f"ИИ отвечает {scope}" if changed else f"ИИ уже отвечает {scope}")
+        return Answer(f"ИИ больше не отвечает {scope}" if changed else f"ИИ и не отвечал {scope}")
+
+    if cmd.name == "persona":
+        if not cmd.arg:
+            return Answer(f"Характер ИИ:\n{store.persona}" if store.persona else "Характер ИИ не задан, отвечает по умолчанию")
+        store.set_persona("" if cmd.arg == "-" else cmd.arg)
+        return Answer("Характер ИИ сброшен" if cmd.arg == "-" else "Характер ИИ сохранён")
+
     if cmd.name == "reply":
         keys, sep, answer = cmd.arg.partition("=>")
         keywords, answer = split_keywords(keys), answer.strip()
@@ -158,4 +176,10 @@ def format_rules(store: Store, chat_id: int | None) -> str:
     ]
     if muted:
         lines.append("Заглушены: " + ", ".join(muted))
+    ai = [
+        f"{a.label} #{c}".strip() for c, a in sorted(store.ai_chats.items())
+        if chat_id is None or c == chat_id
+    ]
+    if ai:
+        lines.append("ИИ отвечает: " + ", ".join(ai))
     return "\n".join(lines) or "Правил пока нет"
