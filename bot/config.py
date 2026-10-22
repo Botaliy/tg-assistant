@@ -64,6 +64,12 @@ class Settings(BaseSettings):
     # The panel gets a copy of the rules and the database this often; 0 = never.
     backup_days: int = 7
 
+    # The Mini App (bot.webapp): its public HTTPS address, e.g.
+    # https://expense-tracker.site/tg/ (nginx proxies it to webapp_port).
+    # Empty = no Mini App, no port.
+    webapp_url: str = ""
+    webapp_port: int = 8080
+
     @property
     def data_path(self) -> Path:
         path = (BASE_DIR / self.data_dir).resolve()

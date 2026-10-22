@@ -170,6 +170,18 @@ class Journal:
     def drop_draft(self, draft_id: int) -> None:
         self.db.execute("DELETE FROM drafts WHERE id = ?", (draft_id,))
 
+    def list_drafts(self) -> list[Draft]:
+        rows = self.db.execute(
+            "SELECT id, chat_id, label, text, reply_to, context FROM drafts ORDER BY id DESC",
+        ).fetchall()
+        return [Draft(*row) for row in rows]
+
+    def recent_reports(self, limit: int = 30) -> list[tuple[float, int, str, str, str]]:
+        """ts, chat id, label, reason, text; the newest first."""
+        return self.db.execute(
+            "SELECT ts, chat_id, label, reason, text FROM reports ORDER BY id DESC LIMIT ?", (limit,),
+        ).fetchall()
+
     # Tokens and money.
 
     def add_usage(

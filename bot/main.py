@@ -6,7 +6,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
 
-from telethon import TelegramClient, events, utils
+from telethon import TelegramClient, events, functions, types, utils
 from telethon.errors import RPCError
 
 from bot import commands, monitor, panel
@@ -344,7 +344,20 @@ async def run() -> None:
         client, assistant, store, Cooldown(settings.reply_cooldown_seconds), notify, bot_me.id, ai,
     )
     assistant.ai = ai
-    panel.setup(bot, assistant, store, owner_id=me.id)
+    panel.setup(bot, assistant, store, owner_id=me.id, webapp_url=settings.webapp_url)
+    if settings.webapp_url:
+        # Imported only when needed, like the AI: aiohttp is a few MB.
+        from bot import webapp
+
+        await webapp.serve(webapp.build_app(assistant, settings.bot_token, me.id), settings.webapp_port)
+        try:
+            # The "Пульт" button next to the message field, for me only.
+            await bot(functions.bots.SetBotMenuButtonRequest(
+                user_id=await bot.get_input_entity(me.id),
+                button=types.BotMenuButton("Пульт", settings.webapp_url),
+            ))
+        except (RPCError, ValueError) as e:
+            log.warning("Can't set the menu button: %s", e)
 
     async def send_backup() -> None:
         try:

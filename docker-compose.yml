@@ -8,7 +8,7 @@ services:
       # account, so this directory must stay private (chmod 700).
       - ./data:/app/data
     # The VPS has 1 GB and no swap, shared with expense-tracker and greek-cards.
-    # ~60 MB idle, ~100 MB with AI chats on (the anthropic SDK).
+    # ~60 MB idle, ~110 MB with AI chats on (the anthropic SDK) and the Mini App.
     mem_limit: 200m
     # The docker default keeps logs forever.
     logging:
@@ -16,6 +16,21 @@ services:
       options:
         max-size: 10m
         max-file: "3"
-    # No ports: the userbot only makes outgoing connections to Telegram,
-    # so it doesn't collide with expense-tracker's nginx on 80/443, and it
-    # stays on its own docker network, away from expense-tracker_default.
+    # No published ports. The Mini App (bot.webapp) listens on 8080 inside
+    # docker only: expense-tracker's nginx serves it over HTTPS at
+    # https://expense-tracker.site/tg/, reaching this container as
+    # "tg-assistant" on expense-tracker's network (like greek-cards). Every
+    # API request there is checked against Telegram's signature (initData).
+    expose:
+      - "8080"
+    networks:
+      default:
+      web:
+        aliases:
+          - tg-assistant
+
+networks:
+  web:
+    # Created by expense-tracker's compose project: deploy that one first.
+    name: expense-tracker_default
+    external: true

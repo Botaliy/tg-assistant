@@ -13,7 +13,7 @@ themselves are kept in the journal, so their buttons work after a restart.
 
 from dataclasses import dataclass, field
 
-from telethon import Button, TelegramClient, events, utils
+from telethon import Button, TelegramClient, events, types, utils
 from telethon.errors import MessageNotModifiedError
 
 from bot import commands
@@ -38,8 +38,10 @@ class Wizard:
     draft_id: int | None = None  # "draft": the draft my text replaces
 
 
-def menu_buttons():
-    return [
+def menu_buttons(webapp_url: str = ""):
+    # The Mini App (bot.webapp), when it's set up.
+    app = [[types.KeyboardInlineButton("🖥 Открыть пульт", types.InlineButtonTypeWebView(webapp_url))]] if webapp_url else []
+    return app + [
         [Button.inline("📋 Правила", b"rules"), Button.inline("🔇 Заглушённые", b"muted")],
         [Button.inline("💬 Автоответ", b"new:reply"), Button.inline("🚫 Фильтр слов", b"new:filter")],
         [Button.inline("🤖 ИИ-собеседник", b"ai"), Button.inline("🗑 Удалить сообщения", b"new:del")],
@@ -173,7 +175,7 @@ async def reply(event, screen: tuple[str, list]) -> None:
     await event.reply(text, buttons=buttons)
 
 
-def setup(bot: TelegramClient, assistant, store: Store, owner_id: int) -> None:
+def setup(bot: TelegramClient, assistant, store: Store, owner_id: int, webapp_url: str = "") -> None:
     # `assistant` is bot.main.Assistant (not imported: main imports this module).
     wizard: Wizard | None = None
     labels: dict[int, str] = {}  # what a chat from a forward/target is called
@@ -247,7 +249,7 @@ def setup(bot: TelegramClient, assistant, store: Store, owner_id: int) -> None:
 
         if name == "menu":
             wizard = None
-            await event.edit("Что делаем?", buttons=menu_buttons())
+            await event.edit("Что делаем?", buttons=menu_buttons(webapp_url))
         elif name == "help":
             await event.edit(commands.HELP, buttons=[BACK])
         elif name == "unread":
@@ -406,7 +408,7 @@ def setup(bot: TelegramClient, assistant, store: Store, owner_id: int) -> None:
         if wizard is None or text.startswith("/"):
             # /start, /menu or anything unexpected: show the menu.
             wizard = None
-            await event.reply("Что делаем?", buttons=menu_buttons())
+            await event.reply("Что делаем?", buttons=menu_buttons(webapp_url))
             return
 
         if wizard.step == "target":

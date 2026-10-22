@@ -1,0 +1,362 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Пульт</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root {
+    --bg: var(--tg-theme-secondary-bg-color, #f1f1f4);
+    --card: var(--tg-theme-section-bg-color, var(--tg-theme-bg-color, #fff));
+    --text: var(--tg-theme-text-color, #111);
+    --hint: var(--tg-theme-hint-color, #8a8a8e);
+    --accent: var(--tg-theme-button-color, #2481cc);
+    --accent-text: var(--tg-theme-button-text-color, #fff);
+    --link: var(--tg-theme-link-color, #2481cc);
+    --danger: var(--tg-theme-destructive-text-color, #e53935);
+    --line: color-mix(in srgb, var(--hint) 25%, transparent);
+    --field: color-mix(in srgb, var(--hint) 12%, transparent);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  body { padding-bottom: 32px; }
+  nav { position: sticky; top: 0; z-index: 5; display: flex; gap: 4px; overflow-x: auto;
+    padding: 8px 12px; background: var(--bg); scrollbar-width: none; }
+  nav::-webkit-scrollbar { display: none; }
+  nav button { flex: none; border: 0; border-radius: 16px; padding: 6px 12px; font: inherit;
+    background: transparent; color: var(--hint); }
+  nav button.on { background: var(--card); color: var(--text); font-weight: 600; }
+  nav .count { margin-left: 4px; padding: 0 6px; border-radius: 8px; font-size: 12px;
+    background: var(--accent); color: var(--accent-text); }
+  main { padding: 0 12px; max-width: 640px; margin: 0 auto; }
+  .card { background: var(--card); border-radius: 12px; padding: 12px 14px; margin: 10px 0; }
+  .card h3 { margin: 0 0 8px; font-size: 13px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: .03em; color: var(--hint); }
+  .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .row.between { justify-content: space-between; flex-wrap: nowrap; }
+  .grow { flex: 1; min-width: 0; }
+  .title { font-weight: 600; overflow-wrap: anywhere; }
+  .hint { color: var(--hint); font-size: 13px; }
+  .big { font-size: 26px; font-weight: 700; }
+  .badge { display: inline-block; font-size: 12px; padding: 1px 7px; border-radius: 8px;
+    background: var(--field); color: var(--hint); margin-right: 4px; }
+  .pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .item { padding: 10px 0; border-top: 1px solid var(--line); }
+  .item:first-of-type { border-top: 0; padding-top: 0; }
+  input, textarea, select { width: 100%; font: inherit; color: var(--text); background: var(--field);
+    border: 0; border-radius: 8px; padding: 8px 10px; outline: none; }
+  input:focus, textarea:focus, select:focus { box-shadow: 0 0 0 2px var(--accent); }
+  textarea { resize: vertical; min-height: 64px; }
+  input.num { width: 64px; }
+  label.field { display: block; margin: 8px 0; }
+  label.field > span { display: block; font-size: 13px; color: var(--hint); margin-bottom: 4px; }
+  .btn { border: 0; border-radius: 8px; padding: 8px 12px; font: inherit; font-weight: 500;
+    background: var(--field); color: var(--link); cursor: pointer; }
+  .btn.primary { background: var(--accent); color: var(--accent-text); }
+  .btn.danger { color: var(--danger); }
+  .btn:disabled { opacity: .5; }
+  .actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+  .seg { display: inline-flex; background: var(--field); border-radius: 8px; padding: 2px; }
+  .seg button { border: 0; background: transparent; font: inherit; font-size: 14px; color: var(--hint);
+    padding: 5px 10px; border-radius: 6px; }
+  .seg button.on { background: var(--card); color: var(--text); font-weight: 600; }
+  .switch { position: relative; width: 50px; height: 30px; flex: none; }
+  .switch input { opacity: 0; width: 0; height: 0; position: absolute; }
+  .switch span { position: absolute; inset: 0; border-radius: 15px; background: var(--field); transition: .2s; }
+  .switch span::after { content: ""; position: absolute; top: 3px; left: 3px; width: 24px; height: 24px;
+    border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.3); transition: .2s; }
+  .switch input:checked + span { background: var(--accent); }
+  .switch input:checked + span::after { transform: translateX(20px); }
+  details summary { cursor: pointer; color: var(--link); font-size: 14px; margin-top: 8px; }
+  .empty { text-align: center; color: var(--hint); padding: 24px 0; }
+  #toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); max-width: 90%;
+    background: rgba(0,0,0,.82); color: #fff; padding: 10px 14px; border-radius: 10px; font-size: 14px;
+    opacity: 0; pointer-events: none; transition: opacity .2s; white-space: pre-wrap; z-index: 10; }
+  #toast.show { opacity: 1; }
+  #toast.error { background: var(--danger); }
+</style>
+</head>
+<body>
+<nav id="tabs"></nav>
+<main id="view"><div class="empty">Загружаю…</div></main>
+<div id="toast"></div>
+<script>
+"use strict";
+const tg = window.Telegram && Telegram.WebApp;
+const TABS = [["home", "Обзор"], ["ai", "ИИ"], ["rules", "Правила"], ["drafts", "Черновики"], ["reports", "Отчёты"]];
+let tab = "home";
+let state = null;
+
+// DOM without innerHTML: everything from the server goes in as text.
+function h(tag, props, ...children) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(props || {})) {
+    if (v === undefined || v === null || v === false) continue;
+    if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
+    else if (k === "class") el.className = v;
+    else if (k in el && k !== "list") el[k] = v;
+    else el.setAttribute(k, v);
+  }
+  for (const c of children.flat()) if (c !== null && c !== undefined && c !== false)
+    el.append(c instanceof Node ? c : String(c));
+  return el;
+}
+const card = (title, ...children) => h("div", {class: "card"}, title ? h("h3", {}, title) : null, ...children);
+const btn = (text, onclick, cls = "") => h("button", {class: "btn " + cls, onclick}, text);
+const money = (x) => "$" + (x || 0).toFixed(4);
+const chatName = (label, id) => `${label || ""} #${id}`.trim();
+
+let toastTimer;
+function toast(text, error = false) {
+  const el = document.getElementById("toast");
+  el.textContent = text;
+  el.className = "show" + (error ? " error" : "");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.className = "", 2600);
+  tg && tg.HapticFeedback && tg.HapticFeedback.notificationOccurred(error ? "error" : "success");
+}
+
+async function api(path, body) {
+  const response = await fetch(path, {
+    method: body === undefined ? "GET" : "POST",
+    headers: {"Authorization": "tma " + tg.initData, "Content-Type": "application/json"},
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const data = await response.json().catch(() => ({error: `HTTP ${response.status}`}));
+  if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+  return data;
+}
+
+async function load() {
+  state = await api("api/state");
+  render();
+}
+
+// Runs a panel command; the answer goes to a toast, then everything reloads.
+async function run(name, arg = "", where = {}) {
+  try {
+    const answer = await api("api/command", {name, arg, ...where});
+    toast(answer.text, answer.error);
+  } catch (e) {
+    toast(e.message, true);
+  }
+  await load().catch(() => {});
+}
+
+function confirmThen(text, action) {
+  if (tg && tg.showConfirm) tg.showConfirm(text, (ok) => ok && action());
+  else if (confirm(text)) action();
+}
+
+function renderTabs() {
+  const nav = document.getElementById("tabs");
+  nav.replaceChildren(...TABS.map(([key, title]) => {
+    const count = key === "drafts" && state ? state.drafts.length : 0;
+    return h("button", {class: key === tab ? "on" : "", onclick: () => { tab = key; render(); scrollTo(0, 0); }},
+      title, count ? h("span", {class: "count"}, count) : null);
+  }));
+}
+
+function render() {
+  renderTabs();
+  const view = document.getElementById("view");
+  view.replaceChildren(...({home, ai, rules, drafts, reports})[tab]());
+}
+
+// --- Обзор ---
+
+function home() {
+  const s = state;
+  const toggle = h("input", {type: "checkbox", checked: s.ai_enabled, disabled: !s.ai_available,
+    onchange: (e) => run("ai", e.target.checked ? "on" : "off")});
+  const persona = h("textarea", {value: s.persona, placeholder: "Например: пишу коротко, на «ты», шучу"});
+  const models = s.usage.month.models;
+  return [
+    card("ИИ-собеседник",
+      h("div", {class: "row between"},
+        h("div", {class: "grow"},
+          h("div", {class: "title"}, !s.ai_available ? "Нет ключа API" : s.ai_enabled ? "Включён" : "Выключен"),
+          h("div", {class: "hint"}, `Чатов в списке: ${s.chats.length}. Ответов с лимитом сегодня: ${s.replies_today} из ${s.daily_limit}`)),
+        h("label", {class: "switch"}, toggle, h("span"))),
+    ),
+    card("Общий характер",
+      persona,
+      h("div", {class: "actions"},
+        btn("Сохранить", () => run("persona", persona.value.trim() || "-"), "primary"),
+        s.persona ? btn("Сбросить", () => run("persona", "-"), "danger") : null),
+    ),
+    card("Расходы",
+      h("div", {class: "row"},
+        h("div", {class: "grow"}, h("div", {class: "hint"}, "Сегодня"), h("div", {class: "big"}, money(s.usage.today.total))),
+        h("div", {class: "grow"}, h("div", {class: "hint"}, "С начала месяца"), h("div", {class: "big"}, money(s.usage.month.total)))),
+      models.map((m) => h("div", {class: "item hint"},
+        `${m.model}: ${m.requests} запр., ${m.input} / ${m.output} ток., ${money(m.cost)}`)),
+      s.usage.top.length ? h("div", {class: "item"},
+        h("div", {class: "hint"}, "Дороже всех в этом месяце"),
+        s.usage.top.map((c) => h("div", {}, `${chatName(c.label, c.id)}: ${c.requests} запр., ${money(c.cost)}`))) : null,
+    ),
+    card("Сервис",
+      h("div", {class: "hint"}, "Копия правил и базы придёт в пульт файлами."),
+      h("div", {class: "actions"}, btn("💾 Бэкап сейчас", () => run("backup")))),
+  ];
+}
+
+// --- ИИ ---
+
+function ai() {
+  const s = state;
+  const target = h("input", {placeholder: "@username или +телефон"});
+  let mode = "";
+  const modes = h("div", {class: "seg"});
+  const setMode = (value) => {
+    mode = value;
+    modes.replaceChildren(...[["", "Отвечает сам"], ["draft", "Черновики"]].map(([v, t]) =>
+      h("button", {class: v === mode ? "on" : "", onclick: () => setMode(v)}, t)));
+  };
+  setMode("");
+  const add = card("Добавить в список",
+    target,
+    h("div", {class: "row", style: "margin-top:8px"}, modes, h("div", {class: "grow"}),
+      btn("Добавить", () => target.value.trim() && run("ai", mode, {target: target.value.trim()}), "primary")));
+  if (!s.chats.length) return [add, h("div", {class: "empty"}, "Список ИИ пуст. Незнакомцы, написавшие первыми, попадут сюда сами.")];
+  return [add, ...s.chats.map(chatCard)];
+}
+
+function chatCard(c) {
+  const where = {chat_id: c.id};
+  const seg = h("div", {class: "seg"}, [["", "Сам"], ["draft", "Черновики"]].map(([v, t]) =>
+    h("button", {class: (c.drafts ? "draft" : "") === v ? "on" : "", onclick: () => run("ai", v, where)}, t)));
+  const persona = h("textarea", {value: c.persona, placeholder: "Например: язвительно, односложно"});
+  const context = h("input", {class: "num", type: "number", min: 1, max: 50, value: 10});
+  const model = (state.deepseek_available || c.model === "deepseek")
+    ? h("select", {onchange: (e) => run("model", e.target.value, where)},
+        h("option", {value: "claude", selected: c.model === "claude"}, "Claude"),
+        h("option", {value: "deepseek", selected: c.model === "deepseek"}, "DeepSeek 🐉"))
+    : null;
+  return h("div", {class: "card"},
+    h("div", {class: "row between"},
+      h("div", {class: "grow"},
+        h("div", {class: "title"}, chatName(c.label, c.id)),
+        h("div", {}, c.auto ? h("span", {class: "badge"}, "🆕 незнакомец") : null,
+          h("span", {class: "badge"}, `ответов: ${c.replies}`))),
+      seg),
+    model ? h("label", {class: "field"}, h("span", {}, "Модель"), model) : null,
+    h("details", {open: !!c.persona}, h("summary", {}, c.persona ? "Характер с ним" : "Задать характер с ним"),
+      h("div", {style: "margin-top:8px"}, persona),
+      h("div", {class: "actions"},
+        btn("Сохранить", () => run("persona", persona.value.trim() || "-", where), "primary"),
+        c.persona ? btn("Сбросить", () => run("persona", "-", where), "danger") : null)),
+    h("div", {class: "actions"},
+      btn("✍️ Ответить", () => run("ans", "", where)),
+      h("div", {class: "row", style: "gap:4px"}, btn("📝 Черновик по", () => run("draft", context.value, where)), context),
+      btn("♻️ Лимит", () => run("reset", "", where)),
+      btn("🔕 Убрать", () => confirmThen(`Убрать ${chatName(c.label, c.id)} из списка ИИ? Незнакомца он больше не подхватит.`,
+        () => run("noai", "", where)), "danger")),
+  );
+}
+
+// --- Правила ---
+
+function rules() {
+  const s = state;
+  let kind = "reply";
+  const target = h("input", {placeholder: "@username, +телефон или пусто — все лички"});
+  const keywords = h("input", {placeholder: "цена, прайс"});
+  const text = h("textarea", {placeholder: "Цены в закрепе"});
+  const textField = h("label", {class: "field"}, h("span", {}, "Что отвечать"), text);
+  const kinds = h("div", {class: "seg"});
+  const setKind = (value) => {
+    kind = value;
+    textField.style.display = kind === "reply" ? "" : "none";
+    kinds.replaceChildren(...[["reply", "💬 Автоответ"], ["filter", "🚫 Фильтр"]].map(([v, t]) =>
+      h("button", {class: v === kind ? "on" : "", onclick: () => setKind(v)}, t)));
+  };
+  setKind("reply");
+  const add = () => {
+    const keys = keywords.value.trim();
+    if (!keys) return toast("Нужно хотя бы одно слово", true);
+    const where = target.value.trim() ? {target: target.value.trim()} : {};
+    if (kind === "reply") {
+      if (!text.value.trim()) return toast("Нужен текст ответа", true);
+      run("reply", `${keys} => ${text.value.trim()}`, where);
+    } else run("filter", keys, where);
+  };
+  const muteTarget = h("input", {placeholder: "@username или +телефон"});
+  return [
+    card("Новое правило", kinds,
+      h("label", {class: "field"}, h("span", {}, "Для кого"), target),
+      h("label", {class: "field"}, h("span", {}, "Ключевые слова через запятую"), keywords),
+      textField,
+      h("div", {class: "actions"}, btn("Добавить", add, "primary"))),
+    card("Правила",
+      s.rules.length ? s.rules.map((r) => h("div", {class: "item row between"},
+        h("div", {class: "grow"},
+          h("div", {class: "hint"}, `${r.kind === "reply" ? "💬" : "🚫"} ${r.chat_id === null ? "все лички" : chatName(r.chat_label, r.chat_id)}`),
+          h("div", {class: "pre"}, `«${r.keywords.join(", ")}» → ${r.kind === "reply" ? r.text : "удалить"}`)),
+        btn("🗑", () => confirmThen(`Удалить правило ${r.id}?`, () => run("unrule", String(r.id))), "danger")))
+        : h("div", {class: "hint"}, "Правил пока нет")),
+    card("Заглушённые",
+      h("div", {class: "hint", style: "margin-bottom:8px"}, "Все их новые сообщения удаляются у обоих."),
+      s.muted.map((m) => h("div", {class: "item row between"},
+        h("div", {class: "grow"}, chatName(m.label, m.id)),
+        btn("🔊 Разглушить", () => run("unmute", "", {chat_id: m.id})))),
+      h("div", {class: "row", style: "margin-top:8px; flex-wrap:nowrap"}, muteTarget,
+        btn("🔇", () => muteTarget.value.trim() && run("mute", "", {target: muteTarget.value.trim()})))),
+  ];
+}
+
+// --- Черновики ---
+
+function drafts() {
+  if (!state.drafts.length) return [h("div", {class: "empty"},
+    "Черновиков нет. Напиши .draft в переписке или нажми «📝 Черновик» на вкладке ИИ.")];
+  return state.drafts.map((d) => {
+    const text = h("textarea", {value: d.text, rows: Math.min(8, d.text.split("\n").length + 2)});
+    const act = async (action, body) => {
+      try {
+        const answer = await api(`api/drafts/${d.id}/${action}`, body || {});
+        toast(answer.text, answer.error);
+      } catch (e) { toast(e.message, true); }
+      if (action === "redo") setTimeout(() => load().catch(() => {}), 6000);
+      await load().catch(() => {});
+    };
+    return card(null,
+      h("div", {class: "title"}, chatName(d.label, d.chat_id)),
+      h("div", {class: "hint", style: "margin-bottom:8px"}, `прочитал ${d.context} сообщ. · можно поправить перед отправкой`),
+      text,
+      h("div", {class: "actions"},
+        btn("✅ Отправить", () => act("send", text.value.trim() !== d.text ? {text: text.value} : {}), "primary"),
+        btn("🔄 Другой вариант", () => act("redo")),
+        btn("✖️", () => act("drop"), "danger")));
+  });
+}
+
+// --- Отчёты ---
+
+function reports() {
+  if (!state.reports.length) return [h("div", {class: "empty"}, "Отчётов пока нет. Они появляются, когда разговор с ИИ затихает.")];
+  const when = (ts) => new Date(ts * 1000).toLocaleString("ru", {day: "numeric", month: "short", hour: "2-digit", minute: "2-digit"});
+  return state.reports.map((r) => card(null,
+    h("div", {class: "row between"}, h("div", {class: "title grow"}, chatName(r.label, r.chat_id)), h("div", {class: "hint"}, when(r.ts))),
+    h("div", {class: "hint"}, r.reason),
+    h("div", {class: "pre", style: "margin-top:6px"}, r.text)));
+}
+
+// Fresh data every 15 s, but never under my fingers.
+setInterval(() => {
+  const busy = document.activeElement && ["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement.tagName);
+  if (!document.hidden && !busy && state) load().catch(() => {});
+}, 15000);
+
+if (!tg || !tg.initData) {
+  document.getElementById("view").replaceChildren(h("div", {class: "empty"}, "Открой пульт из Telegram: кнопка «Пульт» в боте."));
+} else {
+  tg.ready();
+  tg.expand();
+  load().catch((e) => document.getElementById("view").replaceChildren(h("div", {class: "empty"}, e.message)));
+}
+</script>
+</body>
+</html>
