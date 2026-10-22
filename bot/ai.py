@@ -14,6 +14,9 @@ Safety lives in code, not just the prompt:
   number of replies, ever; then the AI hands the chat over to me.
 - If I write in an automatic chat myself, the AI steps out of it for good.
 
+Besides, I can ask for a one-off answer in any chat (".ans"), whether or not
+the AI is on there; the same safety rules apply.
+
 When a conversation goes quiet (or is handed over), the panel gets a short
 report of what it was about.
 """
@@ -27,7 +30,7 @@ from collections.abc import Awaitable, Callable
 import anthropic
 from telethon import TelegramClient, utils
 
-from bot.store import Store
+from bot.store import AiChat, Store
 
 log = logging.getLogger("tg-assistant.ai")
 
@@ -185,6 +188,18 @@ class AiResponder:
                 return False
         return True
 
+    async def answer_now(self, chat_id: int, label: str, reply_to: int | None = None) -> None:
+        """A one-off answer I asked for, in any chat."""
+        task = self._pending.pop(chat_id, None)
+        if task is not None:
+            task.cancel()  # don't answer twice
+        try:
+            await self._reply(chat_id, manual_label=label, reply_to=reply_to)
+        except anthropic.APIError as e:
+            await self._api_failed(chat_id, e)
+        except Exception:
+            log.exception("AI reply failed in %s", chat_id)
+
     async def _reply_later(self, chat_id: int) -> None:
         try:
             await asyncio.sleep(REPLY_DELAY_SECONDS)
@@ -192,13 +207,16 @@ class AiResponder:
         except asyncio.CancelledError:
             raise
         except anthropic.APIError as e:
-            log.warning("Claude request failed in %s: %s", chat_id, e)
-            await self.notify(f"ИИ не смог ответить ({self._label(chat_id)}): {e}")
+            await self._api_failed(chat_id, e)
         except Exception:
             log.exception("AI reply failed in %s", chat_id)
         finally:
             if self._pending.get(chat_id) is asyncio.current_task():
                 del self._pending[chat_id]
+
+    async def _api_failed(self, chat_id: int, e: anthropic.APIError) -> None:
+        log.warning("Claude request failed in %s: %s", chat_id, e)
+        await self.notify(f"ИИ не смог ответить ({self._label(chat_id)}): {e}")
 
     def _label(self, chat_id: int) -> str:
         chat = self.store.ai_chats.get(chat_id)
@@ -224,13 +242,23 @@ class AiResponder:
             return False
         return True
 
-    async def _reply(self, chat_id: int) -> None:
+    async def _reply(
+        self, chat_id: int, manual_label: str | None = None, reply_to: int | None = None,
+    ) -> None:
+        """manual_label is set for a one-off answer I asked for (".ans"): then
+        the chat needn't be an AI chat and the master switch doesn't matter."""
+        manual = manual_label is not None
         chat = self.store.ai_chats.get(chat_id)
-        if chat is None or not self.store.ai_enabled:
+        if not manual and (chat is None or not self.store.ai_enabled):
             return  # turned off while we were waiting
+        listed = chat is not None
+        if chat is None:
+            chat = AiChat(label=manual_label or "")
         history = [m async for m in self.client.iter_messages(chat_id, limit=CONTEXT_MESSAGES)]
         history.reverse()
         if not history or history[-1].out:
+            if manual:
+                await self.notify(f"{chat.label or chat_id}: последнее сообщение твоё, ИИ не на что отвечать")
             return  # the last word is already mine
         if not await self._within_limits(chat_id):
             return
@@ -261,6 +289,8 @@ class AiResponder:
             text = (await self._ask(system, messages) or "").strip()
         if not text or text == SKIP:
             log.info("AI chose not to answer in %s", chat_id)
+            if manual:
+                await self.notify(f"{chat.label or chat_id}: ИИ решил, что отвечать тут нечего")
             return
         if LINK.search(text):
             log.warning("AI reply with a link held back in %s", chat_id)
@@ -272,11 +302,14 @@ class AiResponder:
             # parse_mode=None: plain text, so nothing can hide a link behind markdown.
             sent = await self.client.send_message(
                 chat_id, text, parse_mode=None, link_preview=False,
-                reply_to=self._reply_to.pop(chat_id, None),
+                reply_to=reply_to if manual else self._reply_to.pop(chat_id, None),
             )
             self._sent.add((chat_id, sent.id))
         finally:
             self._sending.discard(chat_id)
+        if not listed:
+            log.info("AI answered once in %s", chat_id)
+            return
         chat.replies += 1
         self.store.save()
         log.info("AI answered in %s (%d replies)", chat_id, chat.replies)

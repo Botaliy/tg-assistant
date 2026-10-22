@@ -33,6 +33,8 @@ class Assistant:
         self.client = client
         self.store = store
         self.ai_available = ai_available
+        self.ai: AiResponder | None = None  # set once the AI is up
+        self._tasks: set[asyncio.Task] = set()
 
     async def delete(self, chat_id: int, ids: list[int]) -> bool:
         # revoke=True removes the messages for the other side too. In groups
@@ -82,8 +84,18 @@ class Assistant:
         username = getattr(entity, "username", None)
         return f"@{username}" if username else utils.get_display_name(entity)
 
+    def answer_with_ai(self, chat_id: int, label: str, reply_to: int | None = None) -> Answer:
+        """A one-off AI answer in a chat, in the background."""
+        if self.ai is None:
+            return error(commands.NO_AI)
+        task = asyncio.create_task(self.ai.answer_now(chat_id, label, reply_to))
+        self._tasks.add(task)  # keep a reference until it's done
+        task.add_done_callback(self._tasks.discard)
+        return Answer(f"ИИ отвечает {label or chat_id}")
+
     async def run_command(
         self, cmd: commands.Command, chat_id: int | None, label: str,
+        reply_to: int | None = None,
     ) -> Answer:
         """A text command for chat_id (None: every private chat).
 
@@ -103,6 +115,10 @@ class Assistant:
             if chat_id is None or count is None:
                 return error("Формат: .del @user N")
             return await self.delete_last(chat_id, count, label)
+        if cmd.name == "ans":
+            if chat_id is None:
+                return error("Кому? Формат: .ans @user")
+            return self.answer_with_ai(chat_id, label, None if cmd.target else reply_to)
         if cmd.name == "ai" and not self.ai_available:
             return error(commands.NO_AI)
         return commands.execute(self.store, cmd, chat_id, label)
@@ -139,7 +155,7 @@ def setup_userbot(
                 count = commands.parse_del_count(cmd.arg)
                 answer = await assistant.delete_last(event.chat_id, count, title)
             else:
-                answer = await assistant.run_command(cmd, event.chat_id, title)
+                answer = await assistant.run_command(cmd, event.chat_id, title, event.reply_to_msg_id)
         except ValueError as e:
             answer = error(str(e))
         except Exception as e:
@@ -213,6 +229,7 @@ async def run() -> None:
     setup_userbot(
         client, assistant, store, Cooldown(settings.reply_cooldown_seconds), notify, bot_me.id, ai,
     )
+    assistant.ai = ai
     panel.setup(bot, assistant, store, owner_id=me.id)
 
     if not store.panel_started:

@@ -103,7 +103,7 @@ def person_screen(store: Store, chat_id: int, label: str):
         [mute, Button.inline("🗑 Удалить последние", f"act:del:{chat_id}".encode())],
         [Button.inline("💬 Автоответ ему", f"act:reply:{chat_id}".encode()),
          Button.inline("🚫 Фильтр слов", f"act:filter:{chat_id}".encode())],
-        [ai],
+        [ai, Button.inline("✍️ Ответить ИИ", f"ans:{chat_id}".encode())],
         BACK,
     ]
 
@@ -230,6 +230,11 @@ def setup(bot: TelegramClient, assistant, store: Store, owner_id: int) -> None:
                 return
             wizard.chat_id, wizard.label = None, ""
             await edit(event, advance(None))
+        elif name == "ans":
+            chat_id = int(arg)
+            label = labels.get(chat_id) or await assistant.label_for(chat_id)
+            answer = assistant.answer_with_ai(chat_id, label)
+            await event.answer(answer.text, alert=answer.is_error)
         elif name == "act":
             kind, _, chat = arg.partition(":")
             chat_id = int(chat)

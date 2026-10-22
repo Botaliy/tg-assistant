@@ -18,7 +18,7 @@ from bot.rules import DELETE, REPLY
 from bot.store import Store
 
 PREFIX = "."
-NAMES = {"help", "del", "mute", "unmute", "reply", "filter", "rules", "unrule", "ai", "noai", "persona"}
+NAMES = {"help", "del", "mute", "unmute", "reply", "filter", "rules", "unrule", "ai", "noai", "persona", "ans"}
 NO_AI = "ИИ выключен: впиши ANTHROPIC_API_KEY в .env на сервере и перезапусти бота"
 # Answers to these are what was asked for, not a confirmation, so they're
 # sent to the panel even when the command was typed in a conversation.
@@ -37,12 +37,14 @@ HELP = """Всё есть на кнопках в /menu. Перешли сюда 
 .ai on / .ai off — включить / выключить ИИ-собеседника целиком
 .ai @user / .noai @user — добавить в список ИИ / убрать (и не подхватывать сам)
 .ai в группе — ИИ отвечает там, когда тебя упомянут или ответят тебе
+.ans @user — ИИ разово отвечает ему, даже если ИИ для него выключен
 .persona текст — как ИИ должен общаться от тебя (без текста — показать, «-» — сбросить)
 Вместо @user можно +телефон из контактов или #id из .rules.
 
 В переписке:
 .del — ответом на сообщение: удалить его у обоих
 .del N — удалить последние N сообщений собеседника
+.ans — ИИ разово отвечает на последние сообщения (ответом на сообщение — реплаем на него)
 Остальные команды там тоже работают (без @user, для этого чата),
 но удаляются молча, без подтверждения."""
 
