@@ -43,6 +43,7 @@ class Store:
             self.ai_chats = {
                 int(c): AiChat(**{k: v for k, v in a.items() if k in fields})
                 for c, a in data.get("ai_chats", {}).items()
+                if int(c) > 0  # private chats only; groups slipped in before ".ai" refused them
             }
             self.ai_enabled = data.get("ai_enabled", False)
             self.ai_blocked = set(data.get("ai_blocked", []))

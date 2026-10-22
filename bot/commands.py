@@ -127,7 +127,12 @@ def execute(store: Store, cmd: Command, chat_id: int | None, label: str = "") ->
         if chat_id is None:
             return error(f"Для кого? Формат: .{cmd.name} @user")
         on = cmd.name == "ai"
+        if on and chat_id < 0:
+            return error("ИИ отвечает только в личных чатах, не в группах")
         changed = store.set_ai(chat_id, on, label)
+        if on and not store.ai_enabled:
+            # An error so that it reaches the panel even from a conversation.
+            return error(f"{label or chat_id} в списке ИИ, но сам ИИ выключен: включи .ai on или кнопкой в пульте")
         if on:
             return Answer(f"ИИ отвечает {scope}" if changed else f"ИИ уже отвечает {scope}")
         return Answer(f"ИИ больше не отвечает {scope}" if changed else f"ИИ и не отвечал {scope}")
