@@ -34,8 +34,9 @@ HELP = """Всё есть на кнопках в /menu. Перешли сюда 
 .del @user N — удалить его последние N сообщений
 .rules [@user] — список правил
 .unrule N — удалить правило N
-.ai on / .ai off — включить / выключить ИИ-собеседника целиком
+.ai on / .ai off — включить / выключить ИИ-собеседника целиком (только здесь, в пульте)
 .ai @user / .noai @user — добавить в список ИИ / убрать (и не подхватывать сам)
+.ai on @user / .ai off @user — то же, что .ai @user / .noai @user
 .ai в группе — ИИ отвечает там, когда тебя упомянут или ответят тебе
 .ans @user — ИИ разово отвечает ему, даже если ИИ для него выключен
 .reset @user — сбросить ему дневной лимит ответов ИИ (незнакомцу — и общий)
@@ -47,6 +48,7 @@ HELP = """Всё есть на кнопках в /menu. Перешли сюда 
 .del — ответом на сообщение: удалить его у обоих
 .del N — удалить последние N сообщений собеседника
 .ans — ИИ разово отвечает на последние сообщения (ответом на сообщение — реплаем на него)
+.ai on / .ai off — включить / выключить ИИ только в этом чате (.ai off = .noai)
 Остальные команды там тоже работают (без @user, для этого чата),
 но удаляются молча, без подтверждения."""
 
@@ -124,18 +126,20 @@ def execute(store: Store, cmd: Command, chat_id: int | None, label: str = "") ->
             return Answer(f"Удаляю все новые сообщения {scope}" if changed else f"{label} уже заглушён")
         return Answer(f"Больше не удаляю сообщения {scope}" if changed else f"{label} и не был заглушён")
 
-    if cmd.name == "ai" and cmd.arg in ("on", "off") and not cmd.target:
+    # The master switch only from the panel: in a conversation (or with
+    # @user) ".ai on/off" is about that one chat.
+    if cmd.name == "ai" and cmd.arg in ("on", "off") and chat_id is None:
         store.set_ai_enabled(cmd.arg == "on")
         return Answer("ИИ включён" if store.ai_enabled else "ИИ выключен везде")
 
     if cmd.name in ("ai", "noai"):
         if chat_id is None:
             return error(f"Для кого? Формат: .{cmd.name} @user")
-        on = cmd.name == "ai"
+        on = cmd.name == "ai" and cmd.arg != "off"
         changed = store.set_ai(chat_id, on, label)
         if on and not store.ai_enabled:
             # An error so that it reaches the panel even from a conversation.
-            return error(f"{label or chat_id} в списке ИИ, но сам ИИ выключен: включи .ai on или кнопкой в пульте")
+            return error(f"{label or chat_id} в списке ИИ, но сам ИИ выключен: включи его в пульте (.ai on или кнопкой)")
         if on:
             return Answer(f"ИИ отвечает {scope}" if changed else f"ИИ уже отвечает {scope}")
         return Answer(f"ИИ больше не отвечает {scope}" if changed else f"ИИ и не отвечал {scope}")
@@ -177,6 +181,10 @@ def execute(store: Store, cmd: Command, chat_id: int | None, label: str = "") ->
     raise ValueError(f"Unhandled command: {cmd.name}")
 
 
+def short(text: str, limit: int = 80) -> str:
+    return text if len(text) <= limit else text[:limit - 1].rstrip() + "…"
+
+
 def format_rules(store: Store, chat_id: int | None) -> str:
     # Without a target show everything; for a chat — what applies there.
     rules = [r for r in store.rules if chat_id is None or r.chat_id in (None, chat_id)]
@@ -199,4 +207,10 @@ def format_rules(store: Store, chat_id: int | None) -> str:
     if ai:
         state = "" if store.ai_enabled else " (сейчас ИИ выключен)"
         lines.append(f"ИИ отвечает{state}: " + ", ".join(ai))
+    if chat_id is None and store.persona:
+        lines.append(f"Общий характер ИИ: {short(store.persona)}")
+    for c, persona in sorted(store.chat_personas.items()):
+        if chat_id is None or c == chat_id:
+            label = store.ai_chats[c].label if c in store.ai_chats else store.muted.get(c, "")
+            lines.append(f"Характер ИИ для {f'{label} #{c}'.strip()}: {short(persona)}")
     return "\n".join(lines) or "Правил пока нет"

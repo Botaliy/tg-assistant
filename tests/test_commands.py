@@ -115,3 +115,28 @@ def test_ai_on_a_picked_up_stranger_keeps_them(store):
     run(store, ".ai on")
     run(store, ".ai", chat_id=5, label="@vasya")
     assert store.ai_chats[5].auto is False
+
+
+def test_ai_on_off_in_a_chat_is_about_that_chat(store):
+    run(store, ".ai on")
+    run(store, ".ai on", chat_id=5, label="@vasya")
+    assert 5 in store.ai_chats
+    run(store, ".ai off", chat_id=5, label="@vasya")
+    assert store.ai_enabled
+    assert 5 not in store.ai_chats and 5 in store.ai_blocked
+    run(store, ".ai off")
+    assert not store.ai_enabled
+
+
+def test_rules_show_personas(store):
+    run(store, ".persona на ты")
+    run(store, ".ai on")
+    run(store, ".ai", chat_id=5, label="@vasya")
+    run(store, ".persona " + "язвительно " * 20, chat_id=5)
+    run(store, ".persona вежливо", chat_id=6)
+    listing = run(store, ".rules").text
+    assert "Общий характер ИИ: на ты" in listing
+    assert "Характер ИИ для @vasya #5: язвительно" in listing and "…" in listing
+    assert "Характер ИИ для #6: вежливо" in listing
+    in_chat = run(store, ".rules", chat_id=6).text
+    assert "вежливо" in in_chat and "на ты" not in in_chat and "#5" not in in_chat
