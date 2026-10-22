@@ -38,7 +38,8 @@ HELP = """Всё есть на кнопках в /menu. Перешли сюда 
 .ai @user / .noai @user — добавить в список ИИ / убрать (и не подхватывать сам)
 .ai в группе — ИИ отвечает там, когда тебя упомянут или ответят тебе
 .ans @user — ИИ разово отвечает ему, даже если ИИ для него выключен
-.persona текст — как ИИ должен общаться от тебя (без текста — показать, «-» — сбросить)
+.persona текст — общий характер ИИ (без текста — показать, «-» — сбросить)
+.persona @user текст — характер ИИ с ним, важнее общего
 Вместо @user можно +телефон из контактов или #id из .rules.
 
 В переписке:
@@ -139,10 +140,13 @@ def execute(store: Store, cmd: Command, chat_id: int | None, label: str = "") ->
         return Answer(f"ИИ больше не отвечает {scope}" if changed else f"ИИ и не отвечал {scope}")
 
     if cmd.name == "persona":
+        # Without a target: the general style; for a chat: that chat's own.
+        current = store.persona if chat_id is None else store.chat_personas.get(chat_id, "")
+        whose = "Общий характер ИИ" if chat_id is None else f"Характер ИИ {scope}"
         if not cmd.arg:
-            return Answer(f"Характер ИИ:\n{store.persona}" if store.persona else "Характер ИИ не задан, отвечает по умолчанию")
-        store.set_persona("" if cmd.arg == "-" else cmd.arg)
-        return Answer("Характер ИИ сброшен" if cmd.arg == "-" else "Характер ИИ сохранён")
+            return Answer(f"{whose}:\n{current}" if current else f"{whose} не задан")
+        store.set_persona("" if cmd.arg == "-" else cmd.arg, chat_id)
+        return Answer(f"{whose} сброшен" if cmd.arg == "-" else f"{whose} сохранён")
 
     if cmd.name == "reply":
         keys, sep, answer = cmd.arg.partition("=>")

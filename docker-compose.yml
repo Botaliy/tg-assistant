@@ -10,6 +10,12 @@ services:
     # The VPS has 1 GB and no swap, shared with expense-tracker and greek-cards.
     # ~60 MB idle, ~100 MB with AI chats on (the anthropic SDK).
     mem_limit: 200m
+    # The docker default keeps logs forever.
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
     # No ports: the userbot only makes outgoing connections to Telegram,
     # so it doesn't collide with expense-tracker's nginx on 80/443, and it
     # stays on its own docker network, away from expense-tracker_default.

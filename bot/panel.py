@@ -79,7 +79,10 @@ def ai_screen(store: Store):
     )
     if rows:
         text += "\n\nСписок (🆕 — незнакомец, подхвачен сам). Кнопка убирает из списка навсегда."
-    text += "\n\nХарактер ответов: .persona пишу коротко, на «ты», шучу"
+    text += (
+        "\n\nХарактер ответов: .persona пишу коротко, на «ты», шучу"
+        "\nДля одного человека: .persona @user язвительно, односложно"
+    )
     if store.persona:
         text += f"\nСейчас: {store.persona}"
     return text, [[toggle]] + rows + [[Button.inline("➕ Добавить в список", b"new:ai")], BACK]
@@ -97,6 +100,8 @@ def person_screen(store: Store, chat_id: int, label: str):
     )
     rules = [r for r in store.rules if r.chat_id == chat_id]
     text = f"{label or chat_id} #{chat_id}"
+    if chat_id in store.chat_personas:
+        text += f"\nХарактер ИИ с ним: {store.chat_personas[chat_id]}"
     if rules:
         text += "\n" + commands.format_rules(store, chat_id)
     return text, [

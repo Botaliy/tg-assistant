@@ -133,7 +133,10 @@ def setup_userbot(
     async def on_command(event) -> None:
         if event.chat_id == panel_id:
             return  # commands to the panel bot are its business
-        cmd = commands.parse(event.raw_text)
+        if ai is not None and ai.is_own(event):
+            return  # the AI's reply is never a command, whatever it says
+        # A forwarded message is someone else's text, even if it starts with a dot.
+        cmd = None if event.fwd_from else commands.parse(event.raw_text)
         if cmd is None:
             if ai is not None and event.is_private:
                 await ai.on_outgoing(event)
@@ -211,7 +214,8 @@ async def run() -> None:
         try:
             # Plain text: AI replies and reports quote strangers' messages.
             await bot.send_message(me.id, text, parse_mode=None, link_preview=False)
-        except RPCError as e:
+        except (RPCError, ValueError) as e:
+            # ValueError: the panel bot hasn't seen me yet (no /start pressed).
             log.warning("Can't reach the panel: %s", e)
 
     ai = None

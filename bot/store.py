@@ -33,6 +33,8 @@ class Store:
         self.ai_blocked: set[int] = set()
         # How Claude should sound in AI chats: set by ".persona", empty = default.
         self.persona = ""
+        # A style for one chat (".persona @user ..."), on top of the general one.
+        self.chat_personas: dict[int, str] = {}
         self._next_id = 1
         if path.exists():
             data = json.loads(path.read_text(encoding="utf-8"))
@@ -47,6 +49,7 @@ class Store:
             self.ai_enabled = data.get("ai_enabled", False)
             self.ai_blocked = set(data.get("ai_blocked", []))
             self.persona = data.get("persona", "")
+            self.chat_personas = {int(c): t for c, t in data.get("chat_personas", {}).items()}
             self._next_id = data.get("next_id", 1)
 
     def add_rule(
@@ -83,7 +86,12 @@ class Store:
 
     def set_ai(self, chat_id: int, on: bool, label: str = "", auto: bool = False) -> bool:
         """Returns False if the chat was already in that state."""
-        if (chat_id in self.ai_chats) == on:
+        existing = self.ai_chats.get(chat_id)
+        if on and existing is not None and existing.auto and not auto:
+            existing.auto = False  # a picked-up stranger I now keep on purpose
+            self.save()
+            return True
+        if (existing is not None) == on:
             return False
         if on:
             self.ai_chats[chat_id] = AiChat(label=label, auto=auto)
@@ -98,8 +106,14 @@ class Store:
         self.ai_enabled = enabled
         self.save()
 
-    def set_persona(self, persona: str) -> None:
-        self.persona = persona
+    def set_persona(self, persona: str, chat_id: int | None = None) -> None:
+        """chat_id None: the general style; otherwise that chat's own."""
+        if chat_id is None:
+            self.persona = persona
+        elif persona:
+            self.chat_personas[chat_id] = persona
+        else:
+            self.chat_personas.pop(chat_id, None)
         self.save()
 
     def set_panel_started(self) -> None:
@@ -133,6 +147,7 @@ class Store:
             "ai_chats": {str(c): asdict(a) for c, a in sorted(self.ai_chats.items())},
             "ai_blocked": sorted(self.ai_blocked),
             "persona": self.persona,
+            "chat_personas": {str(c): t for c, t in sorted(self.chat_personas.items())},
         }
         tmp = self.path.with_suffix(".tmp")
         tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")

@@ -97,3 +97,21 @@ def test_ai_warns_when_switched_off(store):
     run(store, ".ai on")
     assert store.ai_enabled
     assert not run(store, ".ai", chat_id=6, label="@petya").is_error
+
+
+def test_persona_general_and_per_chat(store):
+    run(store, ".persona на ты, коротко")
+    run(store, ".persona язвительно", chat_id=5, label="@vasya")
+    assert store.persona == "на ты, коротко"
+    assert store.chat_personas == {5: "язвительно"}
+    assert "язвительно" in run(store, ".persona", chat_id=5).text
+    run(store, ".persona -", chat_id=5)
+    assert store.chat_personas == {}
+    assert store.persona == "на ты, коротко"
+
+
+def test_ai_on_a_picked_up_stranger_keeps_them(store):
+    store.set_ai(5, True, "@vasya", auto=True)
+    run(store, ".ai on")
+    run(store, ".ai", chat_id=5, label="@vasya")
+    assert store.ai_chats[5].auto is False
