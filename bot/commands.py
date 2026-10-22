@@ -15,14 +15,17 @@ Everything here is pure — the Telegram side lives in bot.main and bot.panel.
 from dataclasses import dataclass
 
 from bot.rules import DELETE, REPLY
-from bot.store import Store
+from bot.store import DEEPSEEK, Store
 
 PREFIX = "."
-NAMES = {"help", "del", "mute", "unmute", "reply", "filter", "rules", "unrule", "ai", "noai", "persona", "ans", "reset"}
+NAMES = {"help", "del", "mute", "unmute", "reply", "filter", "rules", "unrule", "ai", "noai", "persona", "ans", "reset", "model"}
 NO_AI = "ИИ выключен: впиши ANTHROPIC_API_KEY в .env на сервере и перезапусти бота"
+NO_DEEPSEEK = "DeepSeek не настроен: впиши DEEPSEEK_API_KEY в .env на сервере и перезапусти бота"
+# What ".model" understands; None is Claude.
+MODELS = {"deepseek": DEEPSEEK, "ds": DEEPSEEK, "claude": None, "-": None}
 # Answers to these are what was asked for, not a confirmation, so they're
 # sent to the panel even when the command was typed in a conversation.
-OUTPUT_COMMANDS = {"help", "rules", "persona"}
+OUTPUT_COMMANDS = {"help", "rules", "persona", "model"}
 
 HELP = """Всё есть на кнопках в /menu. Перешли сюда сообщение человека, и появятся кнопки для него.
 
@@ -42,6 +45,7 @@ HELP = """Всё есть на кнопках в /menu. Перешли сюда 
 .reset @user — сбросить ему дневной лимит ответов ИИ (незнакомцу — и общий)
 .persona текст — общий характер ИИ (без текста — показать, «-» — сбросить)
 .persona @user текст — характер ИИ с ним, важнее общего
+.model @user deepseek / .model @user claude — чем ИИ отвечает ему (без модели — показать)
 Вместо @user можно +телефон из контактов или #id из .rules.
 
 В переписке:
@@ -49,6 +53,7 @@ HELP = """Всё есть на кнопках в /menu. Перешли сюда 
 .del N — удалить последние N сообщений собеседника
 .ans — ИИ разово отвечает на последние сообщения (ответом на сообщение — реплаем на него)
 .ai on / .ai off — включить / выключить ИИ только в этом чате (.ai off = .noai)
+.model deepseek / .model claude — чем ИИ отвечает в этом чате
 Остальные команды там тоже работают (без @user, для этого чата),
 но удаляются молча, без подтверждения."""
 
@@ -153,6 +158,20 @@ def execute(store: Store, cmd: Command, chat_id: int | None, label: str = "") ->
         store.set_persona("" if cmd.arg == "-" else cmd.arg, chat_id)
         return Answer(f"{whose} сброшен" if cmd.arg == "-" else f"{whose} сохранён")
 
+    if cmd.name == "model":
+        if chat_id is None:
+            return error("Для кого? Формат: .model @user deepseek")
+        if not cmd.arg:
+            return Answer(f"ИИ {scope} отвечает через {model_name(store.chat_models.get(chat_id))}")
+        if cmd.arg.lower() not in MODELS:
+            return error("Формат: .model deepseek или .model claude")
+        model = MODELS[cmd.arg.lower()]
+        changed = store.set_model(chat_id, model)
+        answer = f"ИИ {scope} {'теперь' if changed else 'и так'} отвечает через {model_name(model)}"
+        if chat_id not in store.ai_chats:
+            answer += ", но сам ИИ тут не включён: .ai — отвечать всегда, .ans — разово"
+        return Answer(answer)
+
     if cmd.name == "reply":
         keys, sep, answer = cmd.arg.partition("=>")
         keywords, answer = split_keywords(keys), answer.strip()
@@ -181,6 +200,10 @@ def execute(store: Store, cmd: Command, chat_id: int | None, label: str = "") ->
     raise ValueError(f"Unhandled command: {cmd.name}")
 
 
+def model_name(model: str | None) -> str:
+    return "DeepSeek" if model == DEEPSEEK else "Claude"
+
+
 def short(text: str, limit: int = 80) -> str:
     return text if len(text) <= limit else text[:limit - 1].rstrip() + "…"
 
@@ -207,6 +230,12 @@ def format_rules(store: Store, chat_id: int | None) -> str:
     if ai:
         state = "" if store.ai_enabled else " (сейчас ИИ выключен)"
         lines.append(f"ИИ отвечает{state}: " + ", ".join(ai))
+    deepseek = [
+        f"{store.ai_chats[c].label if c in store.ai_chats else ''} #{c}".strip()
+        for c, m in sorted(store.chat_models.items()) if m == DEEPSEEK and (chat_id is None or c == chat_id)
+    ]
+    if deepseek:
+        lines.append("Через DeepSeek: " + ", ".join(deepseek))
     if chat_id is None and store.persona:
         lines.append(f"Общий характер ИИ: {short(store.persona)}")
     for c, persona in sorted(store.chat_personas.items()):

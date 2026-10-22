@@ -15,7 +15,7 @@ from telethon.errors import MessageNotModifiedError
 
 from bot import commands
 from bot.commands import Answer, Command
-from bot.store import Store
+from bot.store import DEEPSEEK, Store
 
 ASK_TARGET = "Для кого? Пришли @username, +телефон или перешли сюда его сообщение."
 NO_FORWARD_AUTHOR = (
@@ -70,7 +70,11 @@ def ai_screen(store: Store):
         else Button.inline("▶️ Включить ИИ", b"aion")
     )
     rows = [
-        [Button.inline(f"🔕 {'🆕 ' if a.auto else ''}{f'{a.label} #{c}'.strip()}", f"noai:{c}".encode())]
+        [Button.inline(
+            f"🔕 {'🆕 ' if a.auto else ''}{'🐉 ' if store.chat_models.get(c) == DEEPSEEK else ''}"
+            f"{f'{a.label} #{c}'.strip()}",
+            f"noai:{c}".encode(),
+        )]
         for c, a in sorted(store.ai_chats.items())
     ]
     text = "🤖 ИИ " + ("включён." if store.ai_enabled else "выключен.") + (
@@ -78,17 +82,21 @@ def ai_screen(store: Store):
         "и людям из списка. Каждый разговор кончается отчётом здесь."
     )
     if rows:
-        text += "\n\nСписок (🆕 — незнакомец, подхвачен сам). Кнопка убирает из списка навсегда."
+        text += (
+            "\n\nСписок (🆕 — незнакомец, подхвачен сам, 🐉 — отвечает DeepSeek). "
+            "Кнопка убирает из списка навсегда."
+        )
     text += (
         "\n\nХарактер ответов: .persona пишу коротко, на «ты», шучу"
         "\nДля одного человека: .persona @user язвительно, односложно"
+        "\nОтвечать ему через DeepSeek: .model @user deepseek (или кнопкой на экране человека)"
     )
     if store.persona:
         text += f"\nСейчас: {store.persona}"
     return text, [[toggle]] + rows + [[Button.inline("➕ Добавить в список", b"new:ai")], BACK]
 
 
-def person_screen(store: Store, chat_id: int, label: str):
+def person_screen(store: Store, chat_id: int, label: str, deepseek_available: bool):
     muted = chat_id in store.muted
     mute = (
         Button.inline("🔊 Разглушить", f"unmute:{chat_id}".encode()) if muted
@@ -98,18 +106,28 @@ def person_screen(store: Store, chat_id: int, label: str):
         Button.inline("🔕 Выключить ИИ", f"noai:{chat_id}".encode()) if chat_id in store.ai_chats
         else Button.inline("🤖 Включить ИИ", f"act:ai:{chat_id}".encode())
     )
+    on_deepseek = store.chat_models.get(chat_id) == DEEPSEEK
     rules = [r for r in store.rules if r.chat_id == chat_id]
     text = f"{label or chat_id} #{chat_id}"
+    if on_deepseek:
+        text += "\nИИ отвечает ему через DeepSeek 🐉"
     if chat_id in store.chat_personas:
         text += f"\nХарактер ИИ с ним: {store.chat_personas[chat_id]}"
     if rules:
         text += "\n" + commands.format_rules(store, chat_id)
+    # DeepSeek is offered only when there's a key, but the way back to Claude always is.
+    model = []
+    if on_deepseek:
+        model = [[Button.inline("🧠 Вернуть Claude", f"model:{chat_id}:claude".encode())]]
+    elif deepseek_available:
+        model = [[Button.inline("🐉 Отвечать через DeepSeek", f"model:{chat_id}:deepseek".encode())]]
     return text, [
         [mute, Button.inline("🗑 Удалить последние", f"act:del:{chat_id}".encode())],
         [Button.inline("💬 Автоответ ему", f"act:reply:{chat_id}".encode()),
          Button.inline("🚫 Фильтр слов", f"act:filter:{chat_id}".encode())],
         [ai, Button.inline("✍️ Ответить ИИ", f"ans:{chat_id}".encode())],
         [Button.inline("♻️ Сбросить лимит ИИ", f"reset:{chat_id}".encode())],
+        *model,
         BACK,
     ]
 
@@ -247,6 +265,16 @@ def setup(bot: TelegramClient, assistant, store: Store, owner_id: int) -> None:
             label = labels.get(chat_id) or await assistant.label_for(chat_id)
             answer = assistant.answer_with_ai(chat_id, label)
             await event.answer(answer.text, alert=answer.is_error)
+        elif name == "model":
+            chat, _, model = arg.partition(":")
+            chat_id = int(chat)
+            if model == DEEPSEEK and not assistant.deepseek_available:
+                await event.answer(commands.NO_DEEPSEEK, alert=True)
+                return
+            label = labels.get(chat_id) or await assistant.label_for(chat_id)
+            answer = commands.execute(store, Command("model", model), chat_id, label)
+            await event.answer(answer.text, alert=chat_id not in store.ai_chats)
+            await edit(event, person_screen(store, chat_id, label, assistant.deepseek_available))
         elif name == "act":
             kind, _, chat = arg.partition(":")
             chat_id = int(chat)
@@ -276,7 +304,7 @@ def setup(bot: TelegramClient, assistant, store: Store, owner_id: int) -> None:
                 await reply(event, await set_target(chat_id, label))
             else:
                 wizard = None
-                await reply(event, person_screen(store, chat_id, label))
+                await reply(event, person_screen(store, chat_id, label, assistant.deepseek_available))
             return
 
         cmd = commands.parse(text)

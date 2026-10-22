@@ -37,3 +37,13 @@ def test_filter_and_unmute(tmp_path):
     assert not store.set_muted(1, True)
     assert store.set_muted(1, False)
     assert not store.should_delete(1, True, "текст")
+
+
+def test_chat_model_survives_reload(tmp_path):
+    path = tmp_path / "rules.json"
+    store = Store(path)
+    assert store.set_model(5, "deepseek")
+    assert not store.set_model(5, "deepseek")
+    assert Store(path).chat_models == {5: "deepseek"}
+    store.set_model(5, None)
+    assert Store(path).chat_models == {}

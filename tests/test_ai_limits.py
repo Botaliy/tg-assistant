@@ -66,3 +66,52 @@ def test_limits_back_when_switched_off(tmp_path):
     ai, client = make(tmp_path, known_unlimited=False)
     answer(ai, FRIEND, 5)
     assert client.sent.count(FRIEND) == 1
+
+
+class FakeDeepSeek:
+    def __init__(self, answer):
+        self.answer = answer
+        self.systems = []
+
+    async def ask(self, system, messages):
+        self.systems.append(system)
+        return self.answer
+
+
+def deepseek_chat(tmp_path, deepseek):
+    ai, client = make(tmp_path, known_unlimited=True)
+    ai.deepseek = deepseek
+    ai.store.set_model(FRIEND, "deepseek")
+    notes = []
+
+    async def notify(text):
+        notes.append(text)
+
+    ai.notify = notify
+    return ai, client, notes
+
+
+def test_deepseek_chat_goes_to_deepseek_without_the_delicate_topics_rule(tmp_path):
+    deepseek = FakeDeepSeek("сам такой")
+    ai, client, _ = deepseek_chat(tmp_path, deepseek)
+    answer(ai, FRIEND, 1)
+    assert client.sent == [FRIEND]
+    [system] = deepseek.systems
+    assert "деликатн" not in system and "[skip]" in system
+    # Other chats stay on Claude, with the rule.
+    answer(ai, STRANGER, 1)
+    assert len(deepseek.systems) == 1
+
+
+def test_deepseek_refusal_is_reported_as_such(tmp_path):
+    ai, client, notes = deepseek_chat(tmp_path, FakeDeepSeek(None))
+    answer(ai, FRIEND, 1)
+    assert client.sent == []
+    assert notes and "DeepSeek отказался" in notes[0]
+
+
+def test_deepseek_chat_without_a_key_stays_silent(tmp_path):
+    ai, client, notes = deepseek_chat(tmp_path, None)
+    answer(ai, FRIEND, 1)
+    assert client.sent == []
+    assert "DEEPSEEK_API_KEY" in notes[0]

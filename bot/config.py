@@ -40,6 +40,10 @@ class Settings(BaseSettings):
     # Private chats with people I know (not strangers picked up on their own)
     # skip both daily caps. Set to false to put the caps back.
     ai_known_unlimited: bool = True
+    # DeepSeek for chats switched to it (".model deepseek"), from
+    # https://platform.deepseek.com. Empty key = only Claude.
+    deepseek_api_key: str = ""
+    deepseek_model: str = "deepseek-chat"
 
     @property
     def data_path(self) -> Path:

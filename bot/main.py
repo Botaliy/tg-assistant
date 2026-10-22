@@ -84,6 +84,10 @@ class Assistant:
         username = getattr(entity, "username", None)
         return f"@{username}" if username else utils.get_display_name(entity)
 
+    @property
+    def deepseek_available(self) -> bool:
+        return self.ai is not None and self.ai.deepseek is not None
+
     def answer_with_ai(self, chat_id: int, label: str, reply_to: int | None = None) -> Answer:
         """A one-off AI answer in a chat, in the background."""
         if self.ai is None:
@@ -128,6 +132,8 @@ class Assistant:
             return Answer(f"Лимит ИИ для {label or chat_id} сброшен")
         if cmd.name == "ai" and not self.ai_available:
             return error(commands.NO_AI)
+        if cmd.name == "model" and commands.MODELS.get(cmd.arg.lower()) and not self.deepseek_available:
+            return error(commands.NO_DEEPSEEK)
         return commands.execute(self.store, cmd, chat_id, label)
 
 
@@ -231,12 +237,14 @@ async def run() -> None:
         import anthropic
 
         from bot.ai import AiResponder
+        from bot.deepseek import DeepSeek
 
         ai = AiResponder(
             client, store, anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key),
             settings.ai_model, settings.ai_effort, settings.ai_daily_per_chat,
             settings.ai_daily_total, settings.ai_stranger_limit, utils.get_display_name(me), notify,
             known_unlimited=settings.ai_known_unlimited,
+            deepseek=DeepSeek(settings.deepseek_api_key, settings.deepseek_model) if settings.deepseek_api_key else None,
         )
     setup_userbot(
         client, assistant, store, Cooldown(settings.reply_cooldown_seconds), notify, bot_me.id, ai,
@@ -253,6 +261,8 @@ async def run() -> None:
         "Running as %s (id %s), panel @%s, AI %s", utils.get_display_name(me), me.id,
         bot_me.username, settings.ai_model if ai else "off",
     )
+    if ai is not None and ai.deepseek is not None:
+        log.info("DeepSeek on: %s", settings.deepseek_model)
     await asyncio.gather(client.run_until_disconnected(), bot.run_until_disconnected())
 
 

@@ -4,6 +4,9 @@ from pathlib import Path
 
 from bot.rules import DELETE, REPLY, Rule
 
+# The model a chat can be switched to (".model deepseek"); Claude otherwise.
+DEEPSEEK = "deepseek"
+
 
 @dataclass
 class AiChat:
@@ -35,6 +38,8 @@ class Store:
         self.persona = ""
         # A style for one chat (".persona @user ..."), on top of the general one.
         self.chat_personas: dict[int, str] = {}
+        # Chats answered by another model than Claude: chat id -> DEEPSEEK.
+        self.chat_models: dict[int, str] = {}
         self._next_id = 1
         if path.exists():
             data = json.loads(path.read_text(encoding="utf-8"))
@@ -50,6 +55,7 @@ class Store:
             self.ai_blocked = set(data.get("ai_blocked", []))
             self.persona = data.get("persona", "")
             self.chat_personas = {int(c): t for c, t in data.get("chat_personas", {}).items()}
+            self.chat_models = {int(c): m for c, m in data.get("chat_models", {}).items()}
             self._next_id = data.get("next_id", 1)
 
     def add_rule(
@@ -116,6 +122,17 @@ class Store:
             self.chat_personas.pop(chat_id, None)
         self.save()
 
+    def set_model(self, chat_id: int, model: str | None) -> bool:
+        """model None: back to Claude. Returns False if nothing changed."""
+        if self.chat_models.get(chat_id) == model:
+            return False
+        if model:
+            self.chat_models[chat_id] = model
+        else:
+            del self.chat_models[chat_id]
+        self.save()
+        return True
+
     def set_panel_started(self) -> None:
         self.panel_started = True
         self.save()
@@ -148,6 +165,7 @@ class Store:
             "ai_blocked": sorted(self.ai_blocked),
             "persona": self.persona,
             "chat_personas": {str(c): t for c, t in sorted(self.chat_personas.items())},
+            "chat_models": {str(c): m for c, m in sorted(self.chat_models.items())},
         }
         tmp = self.path.with_suffix(".tmp")
         tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")

@@ -140,3 +140,21 @@ def test_rules_show_personas(store):
     assert "Характер ИИ для #6: вежливо" in listing
     in_chat = run(store, ".rules", chat_id=6).text
     assert "вежливо" in in_chat and "на ты" not in in_chat and "#5" not in in_chat
+
+
+def test_model_per_chat(store):
+    run(store, ".ai on")
+    run(store, ".ai", chat_id=5, label="@vasya")
+    answer = run(store, ".model deepseek", chat_id=5, label="@vasya")
+    assert not answer.is_error and "DeepSeek" in answer.text and "не включён" not in answer.text
+    assert store.chat_models == {5: "deepseek"}
+    assert "Через DeepSeek: @vasya #5" in run(store, ".rules").text
+    assert "DeepSeek" in run(store, ".model", chat_id=5).text
+    # .noai doesn't forget the model, like it doesn't forget the persona.
+    run(store, ".noai", chat_id=5)
+    assert store.chat_models == {5: "deepseek"}
+    assert "не включён" in run(store, ".model ds", chat_id=5).text
+    run(store, ".model claude", chat_id=5)
+    assert store.chat_models == {}
+    assert run(store, ".model gpt", chat_id=5).is_error
+    assert run(store, ".model deepseek").is_error  # whose?
