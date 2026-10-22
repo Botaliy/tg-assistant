@@ -2,7 +2,10 @@ import asyncio
 import contextlib
 from types import SimpleNamespace
 
+import pytest
+
 from bot.ai import AiResponder
+from bot.journal import Journal, Usage
 from bot.store import Store
 
 STRANGER, FRIEND = 1, 2
@@ -35,11 +38,12 @@ def make(tmp_path, known_unlimited):
 
     ai = AiResponder(
         client, store, api=None, model="m", effort="low", per_chat_limit=1, total_limit=2,
-        stranger_limit=100, me_name="Я", notify=notify, known_unlimited=known_unlimited,
+        stranger_limit=100, me_name="Я", notify=notify, journal=Journal(tmp_path / "assistant.db"),
+        known_unlimited=known_unlimited,
     )
 
     async def ask(system, messages):
-        return "ага"
+        return "ага", Usage(input=1000, output=10)
 
     ai._ask = ask
     ai._schedule_report = lambda chat_id: None
@@ -68,14 +72,39 @@ def test_limits_back_when_switched_off(tmp_path):
     assert client.sent.count(FRIEND) == 1
 
 
+def test_daily_counters_survive_a_restart(tmp_path):
+    ai, client = make(tmp_path, known_unlimited=False)
+    answer(ai, FRIEND, 1)
+    ai, client = make(tmp_path, known_unlimited=False)  # the same database
+    answer(ai, FRIEND, 1)
+    assert client.sent == []
+    ai.reset_limit(FRIEND)
+    answer(ai, FRIEND, 1)
+    assert client.sent == [FRIEND]
+
+
+def test_spend_is_written_down(tmp_path):
+    ai, _ = make(tmp_path, known_unlimited=True)
+    ai.model = "claude-haiku-5-5"
+    answer(ai, FRIEND, 2)
+    [(model, requests, tokens_in, tokens_out, cost)] = ai.journal.spend("2000-01-01")
+    assert (model, requests, tokens_in, tokens_out) == ("claude-haiku-5-5", 2, 2000, 20)
+    assert cost == pytest.approx(2 * (1000 * 0.10 + 10 * 0.50) / 1_000_000)
+
+
 class FakeDeepSeek:
     def __init__(self, answer):
         self.answer = answer
         self.systems = []
 
+    model = "deepseek-flash"
+
     async def ask(self, system, messages):
         self.systems.append(system)
-        return self.answer
+        return self.answer, Usage(input=1000, output=10)
+
+    def cost(self, usage):
+        return 0.0
 
 
 def deepseek_chat(tmp_path, deepseek):

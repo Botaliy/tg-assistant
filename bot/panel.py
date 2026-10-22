@@ -38,7 +38,7 @@ def menu_buttons():
         [Button.inline("📋 Правила", b"rules"), Button.inline("🔇 Заглушённые", b"muted")],
         [Button.inline("💬 Автоответ", b"new:reply"), Button.inline("🚫 Фильтр слов", b"new:filter")],
         [Button.inline("🤖 ИИ-собеседник", b"ai"), Button.inline("🗑 Удалить сообщения", b"new:del")],
-        [Button.inline("❓ Справка", b"help")],
+        [Button.inline("💰 Расходы", b"usage"), Button.inline("❓ Справка", b"help")],
     ]
 
 
@@ -222,6 +222,8 @@ def setup(bot: TelegramClient, assistant, store: Store, owner_id: int) -> None:
             await event.edit("Что делаем?", buttons=menu_buttons())
         elif name == "help":
             await event.edit(commands.HELP, buttons=[BACK])
+        elif name == "usage":
+            await edit(event, (assistant.usage(), [[Button.inline("🔄 Обновить", b"usage")], BACK]))
         elif name == "rules":
             await edit(event, rules_screen(store))
         elif name == "unrule":

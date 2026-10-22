@@ -32,6 +32,7 @@ import asyncio
 import datetime
 import logging
 import re
+import time
 import unicodedata
 from collections.abc import Awaitable, Callable
 
@@ -39,6 +40,7 @@ import anthropic
 from telethon import TelegramClient, utils
 
 from bot.deepseek import DeepSeek, DeepSeekError
+from bot.journal import Journal, Usage, claude_cost
 from bot.store import DEEPSEEK, AiChat, Store
 
 log = logging.getLogger("tg-assistant.ai")
@@ -147,11 +149,13 @@ class AiResponder:
     def __init__(
         self, client: TelegramClient, store: Store, api: anthropic.AsyncAnthropic,
         model: str, effort: str, per_chat_limit: int, total_limit: int, stranger_limit: int,
-        me_name: str, notify: Callable[[str], Awaitable[None]], known_unlimited: bool = False,
-        deepseek: DeepSeek | None = None,
+        me_name: str, notify: Callable[[str], Awaitable[None]], journal: Journal,
+        known_unlimited: bool = False, deepseek: DeepSeek | None = None,
     ):
         self.client = client
         self.store = store
+        # Daily counters, reports waiting to go out, tokens spent.
+        self.journal = journal
         self.api = api
         self.model = model
         self.effort = effort
@@ -179,10 +183,8 @@ class AiResponder:
         # messages from mine.
         self._sending: set[int] = set()
         self._sent: set[tuple[int, int]] = set()
-        # Daily usage, in memory: a restart resets the counters.
+        # Chats told today that they're out of replies (None: the total).
         self._day = datetime.date.today()
-        self._per_chat: dict[int, int] = {}
-        self._total = 0
         self._limit_notified: set[int | None] = set()
 
     def is_own(self, event) -> bool:
@@ -285,7 +287,7 @@ class AiResponder:
     def reset_limit(self, chat_id: int) -> None:
         """Lets a chat start today's AI reply count over; a stranger also gets
         a fresh set of replies."""
-        self._per_chat.pop(chat_id, None)
+        self.journal.reset_replies(chat_id)
         self._limit_notified.discard(chat_id)
         chat = self.store.ai_chats.get(chat_id)
         if chat is not None and chat.replies:
@@ -299,14 +301,14 @@ class AiResponder:
     async def _within_limits(self, chat_id: int) -> bool:
         today = datetime.date.today()
         if today != self._day:
-            self._day, self._per_chat, self._total = today, {}, 0
+            self._day = today
             self._limit_notified.clear()
-        if self._total >= self.total_limit:
+        if self.journal.replies_today() >= self.total_limit:
             if None not in self._limit_notified:
                 self._limit_notified.add(None)
                 await self.notify(f"ИИ исчерпал общий дневной лимит ответов ({self.total_limit}), молчит до завтра")
             return False
-        if self._per_chat.get(chat_id, 0) >= self.per_chat_limit:
+        if self.journal.replies_today(chat_id) >= self.per_chat_limit:
             if chat_id not in self._limit_notified:
                 self._limit_notified.add(chat_id)
                 await self.notify(
@@ -397,13 +399,9 @@ class AiResponder:
             stranger=STRANGER if chat.auto else "", style=self._style(chat_id),
         )
         if not unlimited:
-            self._per_chat[chat_id] = self._per_chat.get(chat_id, 0) + 1
-            self._total += 1
+            self.journal.count_reply(chat_id)
         async with self.client.action(chat_id, "typing"):
-            if use_deepseek:
-                answer = await self.deepseek.ask(system, messages)
-            else:
-                answer = await self._ask(system, messages)
+            answer = await self._complete(system, messages, chat_id, "reply", use_deepseek)
         model = "DeepSeek" if use_deepseek else "Claude"
         if answer is None:
             log.warning("%s refused to answer in %s", model, chat_id)
@@ -465,25 +463,36 @@ class AiResponder:
         else:
             self._schedule_report(chat_id)
 
+    def resume_reports(self) -> None:
+        """Picks up the reports that were waiting when the bot last stopped."""
+        for chat_id, due_at in self.journal.reports_due():
+            self._reports[chat_id] = asyncio.create_task(
+                self._report_later(chat_id, max(0.0, due_at - time.time())),
+            )
+
     def _schedule_report(self, chat_id: int) -> None:
         self._cancel_report(chat_id)
-        self._reports[chat_id] = asyncio.create_task(self._report_later(chat_id))
+        self.journal.set_report_due(chat_id, time.time() + REPORT_AFTER_SECONDS)
+        self._reports[chat_id] = asyncio.create_task(self._report_later(chat_id, REPORT_AFTER_SECONDS))
 
     def _cancel_report(self, chat_id: int) -> None:
+        self.journal.drop_report_due(chat_id)
         task = self._reports.pop(chat_id, None)
         if task is not None and task is not asyncio.current_task():
             task.cancel()
 
-    async def _report_later(self, chat_id: int) -> None:
+    async def _report_later(self, chat_id: int, delay: float) -> None:
         try:
-            await asyncio.sleep(REPORT_AFTER_SECONDS)
+            await asyncio.sleep(delay)
             chat = self.store.ai_chats.get(chat_id)
             if chat is not None:
                 await self._report(chat_id, chat, "Разговор затих")
         except asyncio.CancelledError:
-            raise
+            raise  # a shutdown included: the report stays due for the next start
         except Exception:
             log.exception("AI report failed in %s", chat_id)
+        else:
+            self.journal.drop_report_due(chat_id)
         finally:
             if self._reports.get(chat_id) is asyncio.current_task():
                 del self._reports[chat_id]
@@ -501,14 +510,32 @@ class AiResponder:
             f"{'Автоответчик' if m.out else who}: {text}" for m in history if (text := describe(m))
         )
         try:
-            summary = await self._ask(REPORT_SYSTEM, [{"role": "user", "content": transcript or "(пусто)"}])
+            summary = await self._complete(
+                REPORT_SYSTEM, [{"role": "user", "content": transcript or "(пусто)"}], chat_id, "report",
+            )
         except anthropic.APIError as e:
             summary = f"(отчёт не получился: {e})"
+        summary = (summary or "").strip()
         chat.reported_up_to = history[-1].id
         self.store.save()
-        await self.notify(f"📝 {chat.label or chat_id} #{chat_id}. {reason}.\n{(summary or '').strip()}")
+        self.journal.add_report(chat_id, chat.label, reason, summary)
+        await self.notify(f"📝 {chat.label or chat_id} #{chat_id}. {reason}.\n{summary}")
 
-    async def _ask(self, system: str, messages: list[dict]) -> str | None:
+    async def _complete(
+        self, system: str, messages: list[dict], chat_id: int, kind: str, use_deepseek: bool = False,
+    ) -> str | None:
+        """Asks Claude (or DeepSeek) and writes down what it cost; kind is
+        what for, e.g. "reply" or "report"."""
+        if use_deepseek:
+            text, usage = await self.deepseek.ask(system, messages)
+            model, cost = self.deepseek.model, self.deepseek.cost(usage)
+        else:
+            text, usage = await self._ask(system, messages)
+            model, cost = self.model, claude_cost(self.model, usage) or 0.0
+        self.journal.add_usage(model, kind, usage, cost, chat_id)
+        return text
+
+    async def _ask(self, system: str, messages: list[dict]) -> tuple[str | None, Usage]:
         extra = {}
         if self.model.startswith(FALLBACK_MODELS):
             # Re-runs a request a safety classifier declined on a fitting model.
@@ -517,12 +544,20 @@ class AiResponder:
             model=self.model,
             # Short chat replies; the headroom is for thinking.
             max_tokens=1500,
-            system=system,
+            # A chat's system prompt repeats from one reply to the next: read
+            # from the cache it's 10x cheaper. (Not the messages: the 10-message
+            # window slides, so their prefix changes every time.)
+            system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
             messages=messages,
             output_config={"effort": self.effort},
             **extra,
         )
+        tokens = response.usage
+        usage = Usage(
+            input=tokens.input_tokens, output=tokens.output_tokens,
+            cache_read=tokens.cache_read_input_tokens or 0, cache_write=tokens.cache_creation_input_tokens or 0,
+        )
         if response.stop_reason == "refusal":
             log.warning("Claude declined: %s", response.stop_details)
-            return None
-        return "".join(b.text for b in response.content if b.type == "text")
+            return None, usage
+        return "".join(b.text for b in response.content if b.type == "text"), usage

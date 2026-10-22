@@ -49,6 +49,11 @@ class Settings(BaseSettings):
     # low | high | max; empty = the model's default (high). Short chat
     # replies don't need it to think long.
     deepseek_effort: str = "low"
+    # DeepSeek's prices, $ per 1M tokens, for ".usage": input, input served from
+    # its cache, output. 0 = not counted (tokens are still shown).
+    deepseek_price_input: float = 0.0
+    deepseek_price_cache_hit: float = 0.0
+    deepseek_price_output: float = 0.0
 
     @property
     def data_path(self) -> Path:
@@ -68,6 +73,10 @@ class Settings(BaseSettings):
     @property
     def rules_path(self) -> Path:
         return self.data_path / "rules.json"
+
+    @property
+    def journal_path(self) -> Path:
+        return self.data_path / "assistant.db"
 
 
 @lru_cache

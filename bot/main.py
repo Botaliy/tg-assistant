@@ -12,6 +12,7 @@ from telethon.errors import RPCError
 from bot import commands, panel
 from bot.commands import Answer, error
 from bot.config import Settings, get_settings
+from bot.journal import Journal, format_usage
 from bot.rules import Cooldown
 from bot.store import Store
 
@@ -29,9 +30,10 @@ def build_client(settings: Settings) -> TelegramClient:
 class Assistant:
     """What the userbot can do for me; used by both the userbot and the panel."""
 
-    def __init__(self, client: TelegramClient, store: Store, ai_available: bool):
+    def __init__(self, client: TelegramClient, store: Store, journal: Journal, ai_available: bool):
         self.client = client
         self.store = store
+        self.journal = journal
         self.ai_available = ai_available
         self.ai: AiResponder | None = None  # set once the AI is up
         self._tasks: set[asyncio.Task] = set()
@@ -84,6 +86,11 @@ class Assistant:
         username = getattr(entity, "username", None)
         return f"@{username}" if username else utils.get_display_name(entity)
 
+    def usage(self) -> str:
+        """What the AI has cost, today and this month."""
+        labels = {c: a.label for c, a in self.store.ai_chats.items()}
+        return "💰 Расходы на ИИ\n" + format_usage(self.journal, labels)
+
     @property
     def deepseek_available(self) -> bool:
         return self.ai is not None and self.ai.deepseek is not None
@@ -130,6 +137,8 @@ class Assistant:
                 return error(commands.NO_AI)
             self.ai.reset_limit(chat_id)
             return Answer(f"Лимит ИИ для {label or chat_id} сброшен")
+        if cmd.name == "usage":
+            return Answer(self.usage())
         if cmd.name == "ai" and not self.ai_available:
             return error(commands.NO_AI)
         if cmd.name == "model" and commands.MODELS.get(cmd.arg.lower()) and not self.deepseek_available:
@@ -210,6 +219,7 @@ def setup_userbot(
 async def run() -> None:
     settings = get_settings()
     store = Store(settings.rules_path)
+    journal = Journal(settings.journal_path)
     client = build_client(settings)
 
     await client.connect()
@@ -221,7 +231,7 @@ async def run() -> None:
     await bot.start(bot_token=settings.bot_token)
     bot_me = await bot.get_me()
 
-    assistant = Assistant(client, store, ai_available=bool(settings.anthropic_api_key))
+    assistant = Assistant(client, store, journal, ai_available=bool(settings.anthropic_api_key))
 
     async def notify(text: str) -> None:
         try:
@@ -243,10 +253,14 @@ async def run() -> None:
             client, store, anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key),
             settings.ai_model, settings.ai_effort, settings.ai_daily_per_chat,
             settings.ai_daily_total, settings.ai_stranger_limit, utils.get_display_name(me), notify,
-            known_unlimited=settings.ai_known_unlimited,
-            deepseek=DeepSeek(settings.deepseek_api_key, settings.deepseek_model, settings.deepseek_effort)
-            if settings.deepseek_api_key else None,
+            journal, known_unlimited=settings.ai_known_unlimited,
+            deepseek=DeepSeek(
+                settings.deepseek_api_key, settings.deepseek_model, settings.deepseek_effort,
+                prices=(settings.deepseek_price_input, settings.deepseek_price_cache_hit,
+                        settings.deepseek_price_output),
+            ) if settings.deepseek_api_key else None,
         )
+        ai.resume_reports()
     setup_userbot(
         client, assistant, store, Cooldown(settings.reply_cooldown_seconds), notify, bot_me.id, ai,
     )
