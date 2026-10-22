@@ -18,7 +18,7 @@ from bot.rules import DELETE, REPLY
 from bot.store import DEEPSEEK, Store
 
 PREFIX = "."
-NAMES = {"help", "del", "mute", "unmute", "reply", "filter", "rules", "unrule", "ai", "noai", "persona", "ans", "reset", "model", "usage", "draft"}
+NAMES = {"help", "del", "mute", "unmute", "reply", "filter", "rules", "unrule", "ai", "noai", "persona", "ans", "reset", "model", "usage", "draft", "sum", "backup"}
 NO_AI = "ИИ выключен: впиши ANTHROPIC_API_KEY в .env на сервере и перезапусти бота"
 NO_DEEPSEEK = "DeepSeek не настроен: впиши DEEPSEEK_API_KEY в .env на сервере и перезапусти бота"
 # What ".model" understands; None is Claude.
@@ -27,6 +27,8 @@ MODELS = {"deepseek": DEEPSEEK, "ds": DEEPSEEK, "claude": None, "-": None}
 # sent to the panel even when the command was typed in a conversation.
 # ".draft N" reads at most this many messages.
 MAX_DRAFT_CONTEXT = 50
+# ".sum N" reads at most this many messages.
+MAX_SUM = 300
 OUTPUT_COMMANDS = {"help", "rules", "persona", "model", "usage"}
 
 HELP = """Всё есть на кнопках в /menu. Перешли сюда сообщение человека, и появятся кнопки для него.
@@ -51,6 +53,8 @@ HELP = """Всё есть на кнопках в /menu. Перешли сюда 
 .persona @user текст — характер ИИ с ним, важнее общего
 .model @user deepseek / .model @user claude — чем ИИ отвечает ему (без модели — показать)
 .usage — сколько ИИ потратил сегодня и за месяц
+.sum @чат [N] — выжимка непрочитанного в чате (или последних N сообщений, до 300) сюда
+.backup — прислать сюда копию правил и базы
 Вместо @user можно +телефон из контактов или #id из .rules.
 
 В переписке:
@@ -59,6 +63,7 @@ HELP = """Всё есть на кнопках в /menu. Перешли сюда 
 .ans — ИИ разово отвечает на последние сообщения (ответом на сообщение — реплаем на него)
 .draft [N] — то же, но черновиком в пульт, по последним N сообщениям
 .ai draft — ИИ в этом чате только присылает черновики в пульт
+.sum [N] — выжимка последних N сообщений чата в пульт (без N — непрочитанного)
 .ai on / .ai off — включить / выключить ИИ только в этом чате (.ai off = .noai)
 .model deepseek / .model claude — чем ИИ отвечает в этом чате
 Остальные команды там тоже работают (без @user, для этого чата),
@@ -122,6 +127,15 @@ def parse_draft_context(arg: str) -> int | None:
     if not arg.isdigit() or int(arg) < 1:
         raise ValueError("После .draft нужно число сообщений, например .draft 30")
     return min(int(arg), MAX_DRAFT_CONTEXT)
+
+
+def parse_sum_count(arg: str) -> int | None:
+    """N from ".sum N", capped at MAX_SUM; None: what's unread."""
+    if not arg:
+        return None
+    if not arg.isdigit() or int(arg) < 1:
+        raise ValueError("После .sum нужно число сообщений, например .sum 100")
+    return min(int(arg), MAX_SUM)
 
 
 def error(text: str) -> Answer:

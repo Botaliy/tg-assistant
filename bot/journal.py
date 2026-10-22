@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS usage (
     cache_read INTEGER NOT NULL, cache_write INTEGER NOT NULL, cost REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS usage_day ON usage (day);
+CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS drafts (
     id INTEGER PRIMARY KEY, ts REAL NOT NULL, chat_id INTEGER NOT NULL, label TEXT NOT NULL,
     text TEXT NOT NULL, reply_to INTEGER, context INTEGER NOT NULL
@@ -135,6 +136,15 @@ class Journal:
             "INSERT INTO reports (ts, chat_id, label, reason, text) VALUES (?, ?, ?, ?, ?)",
             (time.time(), chat_id, label, reason, text),
         )
+
+    # Small things to remember, e.g. when the last backup went out.
+
+    def get_meta(self, key: str) -> str | None:
+        row = self.db.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+        return row[0] if row else None
+
+    def set_meta(self, key: str, value: str) -> None:
+        self.db.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", (key, value))
 
     # Drafts.
 

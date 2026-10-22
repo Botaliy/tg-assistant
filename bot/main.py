@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 from telethon import TelegramClient, events, utils
 from telethon.errors import RPCError
 
-from bot import commands, panel
+from bot import commands, monitor, panel
 from bot.commands import Answer, error
 from bot.config import Settings, get_settings
 from bot.journal import Journal, format_usage
@@ -37,6 +37,7 @@ class Assistant:
         self.journal = journal
         self.ai_available = ai_available
         self.ai: AiResponder | None = None  # set once the AI is up
+        self.send_backup: Callable[[], Awaitable[None]] | None = None  # set once the panel is up
         self._tasks: set[asyncio.Task] = set()
 
     async def delete(self, chat_id: int, ids: list[int]) -> bool:
@@ -110,6 +111,24 @@ class Assistant:
             self._background(self.ai.answer_now(chat_id, label, reply_to))
         return Answer(f"ИИ пишет черновик для {label or chat_id}" if draft else f"ИИ отвечает {label or chat_id}")
 
+    def summarize(self, chat_id: int, label: str, count: int | None = None) -> Answer:
+        """The gist of a chat to the panel, in the background."""
+        if self.ai is None:
+            return error(commands.NO_AI)
+        self._background(self.ai.summarize(chat_id, label, count))
+        return Answer(f"Пересказываю {label or chat_id}…")
+
+    async def unread_chats(self, limit: int = 10) -> list[tuple[int, str, int]]:
+        """Groups and channels with unread messages, the most recent first:
+        chat id, title, how many unread."""
+        found = []
+        async for dialog in self.client.iter_dialogs(limit=200):
+            if (dialog.is_group or dialog.is_channel) and dialog.unread_count:
+                found.append((dialog.id, dialog.name, dialog.unread_count))
+                if len(found) == limit:
+                    break
+        return found
+
     def redraft(self, draft_id: int) -> Answer:
         if self.ai is None:
             return error(commands.NO_AI)
@@ -175,6 +194,19 @@ class Assistant:
             return Answer(f"Лимит ИИ для {label or chat_id} сброшен")
         if cmd.name == "usage":
             return Answer(self.usage())
+        if cmd.name == "sum":
+            if chat_id is None:
+                return error("Какой чат? Формат: .sum @чат [N]")
+            try:
+                count = commands.parse_sum_count(cmd.arg)
+            except ValueError as e:
+                return error(str(e))
+            return self.summarize(chat_id, label, count)
+        if cmd.name == "backup":
+            if self.send_backup is None:
+                return error("Бэкап пока недоступен")
+            self._background(self.send_backup())
+            return Answer("Собираю бэкап…")
         if cmd.name == "ai" and not self.ai_available:
             return error(commands.NO_AI)
         if cmd.name == "model" and commands.MODELS.get(cmd.arg.lower()) and not self.deepseek_available:
@@ -314,6 +346,15 @@ async def run() -> None:
     assistant.ai = ai
     panel.setup(bot, assistant, store, owner_id=me.id)
 
+    async def send_backup() -> None:
+        try:
+            await monitor.send_backup(bot, me.id, journal, settings.rules_path)
+        except (RPCError, ValueError, OSError) as e:
+            log.warning("Backup failed: %s", e)
+            await notify(f"Бэкап не получился: {e}")
+
+    assistant.send_backup = send_backup
+
     if not store.panel_started:
         # A bot can't write first: press /start in it on my behalf, once.
         await client.send_message(bot_me.username, "/start")
@@ -325,7 +366,14 @@ async def run() -> None:
     )
     if ai is not None and ai.deepseek is not None:
         log.info("DeepSeek on: %s, effort %s", ai.deepseek.model, ai.deepseek.effort or "default")
-    await asyncio.gather(client.run_until_disconnected(), bot.run_until_disconnected())
+    # A restart I didn't make (a crash, the server rebooting) shows up here.
+    await notify("🟢 Бот запущен")
+    jobs = [client.run_until_disconnected(), bot.run_until_disconnected()]
+    if settings.healthcheck_url:
+        jobs.append(monitor.heartbeat([client, bot], settings.healthcheck_url))
+    if settings.backup_days > 0:
+        jobs.append(monitor.backups(bot, me.id, journal, settings.rules_path, settings.backup_days))
+    await asyncio.gather(*jobs)
 
 
 def main() -> None:

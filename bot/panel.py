@@ -43,7 +43,8 @@ def menu_buttons():
         [Button.inline("📋 Правила", b"rules"), Button.inline("🔇 Заглушённые", b"muted")],
         [Button.inline("💬 Автоответ", b"new:reply"), Button.inline("🚫 Фильтр слов", b"new:filter")],
         [Button.inline("🤖 ИИ-собеседник", b"ai"), Button.inline("🗑 Удалить сообщения", b"new:del")],
-        [Button.inline("💰 Расходы", b"usage"), Button.inline("❓ Справка", b"help")],
+        [Button.inline("📰 Непрочитанное", b"unread"), Button.inline("💰 Расходы", b"usage")],
+        [Button.inline("❓ Справка", b"help")],
     ]
 
 
@@ -249,6 +250,22 @@ def setup(bot: TelegramClient, assistant, store: Store, owner_id: int) -> None:
             await event.edit("Что делаем?", buttons=menu_buttons())
         elif name == "help":
             await event.edit(commands.HELP, buttons=[BACK])
+        elif name == "unread":
+            await event.answer()
+            chats = await assistant.unread_chats()
+            for chat_id, title, _ in chats:
+                labels[chat_id] = title
+            rows = [
+                [Button.inline(f"📰 {title} ({unread})", f"sum:{chat_id}".encode())]
+                for chat_id, title, unread in chats
+            ]
+            text = "Группы и каналы с непрочитанным. Кнопка — выжимка сюда." if rows else "Непрочитанного в группах нет."
+            await edit(event, (text, rows + [[Button.inline("🔄 Обновить", b"unread")], BACK]))
+        elif name == "sum":
+            chat_id = int(arg)
+            label = labels.get(chat_id) or await assistant.label_for(chat_id)
+            answer = assistant.summarize(chat_id, label)
+            await event.answer(answer.text, alert=answer.is_error)
         elif name == "usage":
             await edit(event, (assistant.usage(), [[Button.inline("🔄 Обновить", b"usage")], BACK]))
         elif name == "rules":

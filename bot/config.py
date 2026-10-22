@@ -58,6 +58,12 @@ class Settings(BaseSettings):
     deepseek_price_cache_hit: float = 0.0
     deepseek_price_output: float = 0.0
 
+    # Pinged every 5 minutes while the bot is alive, e.g. a healthchecks.io
+    # check URL. Empty = no heartbeat.
+    healthcheck_url: str = ""
+    # The panel gets a copy of the rules and the database this often; 0 = never.
+    backup_days: int = 7
+
     @property
     def data_path(self) -> Path:
         path = (BASE_DIR / self.data_dir).resolve()
