@@ -14,6 +14,9 @@ class Settings(BaseSettings):
     # From https://my.telegram.org -> API development tools.
     api_id: int
     api_hash: str
+    # The panel bot with buttons, from @BotFather. It only listens to the
+    # account the userbot is logged into.
+    bot_token: str
 
     # Holds the login session (full access to the account — keep it private)
     # and the rules file.
@@ -33,6 +36,10 @@ class Settings(BaseSettings):
     def session_path(self) -> Path:
         # Telethon appends ".session" itself.
         return self.data_path / "assistant"
+
+    @property
+    def panel_session_path(self) -> Path:
+        return self.data_path / "panel"
 
     @property
     def rules_path(self) -> Path:

@@ -7,11 +7,11 @@ def test_rules_and_mutes_survive_reload(tmp_path):
     store = Store(path)
     store.add_rule(REPLY, ["привет"], "Я занят", chat_id=None)
     store.set_muted(7, True, "@vasya")
-    store.set_control_chat(-1009)
+    store.set_panel_started()
 
     reloaded = Store(path)
     assert reloaded.muted == {7: "@vasya"}
-    assert reloaded.control_chat_id == -1009
+    assert reloaded.panel_started
     assert reloaded.reply_for(1, True, "Привет!").text == "Я занят"
     assert reloaded.should_delete(7, True, "что угодно")
     assert reloaded.add_rule(DELETE, ["x"]).id == 2

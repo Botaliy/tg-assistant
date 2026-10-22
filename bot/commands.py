@@ -1,14 +1,15 @@
-"""Commands I type from my own account, e.g. ".mute @vasya" or ".reply цена => ...".
+"""Text commands, e.g. ".mute @vasya" or ".reply цена => ...".
 
-They're meant for the control chat — a private group the bot creates for
-itself — and name the chat they act on with @username. Without a target,
-.reply/.filter/.rules work on every private chat.
+They work in the panel bot (next to its buttons, see bot.panel) and name the
+chat they act on with @username. Without a target, .reply/.filter/.rules work
+on every private chat.
 
-Typed right in a conversation, a command acts on that conversation and is
-deleted silently: no confirmation, only errors and requested output (.rules,
-.help) go to the control chat. ".del" is the one meant for conversations.
+Typed right in a conversation from my account, a command acts on that
+conversation and is deleted silently: no confirmation, only errors and
+requested output (.rules, .help) go to the panel. ".del" is the one meant
+for conversations.
 
-Everything here is pure — the Telegram side lives in bot.main.
+Everything here is pure — the Telegram side lives in bot.main and bot.panel.
 """
 
 from dataclasses import dataclass
@@ -19,12 +20,12 @@ from bot.store import Store
 PREFIX = "."
 NAMES = {"help", "del", "mute", "unmute", "reply", "filter", "rules", "unrule"}
 # Answers to these are what was asked for, not a confirmation, so they're
-# sent to the control chat even when the command was typed in a conversation.
+# sent to the panel even when the command was typed in a conversation.
 OUTPUT_COMMANDS = {"help", "rules"}
 
-HELP = """Команды (пишутся от тебя, начинаются с точки).
+HELP = """Всё есть на кнопках в /menu. Перешли сюда сообщение человека, и появятся кнопки для него.
 
-Здесь, в служебном чате:
+То же самое текстом:
 .mute @user / .unmute @user — удалять все новые сообщения от него / перестать
 .reply ключ1, ключ2 => ответ — автоответ во всех личках
 .reply @user ключ1, ключ2 => ответ — автоответ только ему

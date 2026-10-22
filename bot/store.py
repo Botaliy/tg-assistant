@@ -5,19 +5,20 @@ from bot.rules import DELETE, REPLY, Rule
 
 
 class Store:
-    """Rules, muted chats and the control chat id, kept in one small JSON file."""
+    """Rules and muted chats, kept in one small JSON file."""
 
     def __init__(self, path: Path):
         self.path = path
         self.rules: list[Rule] = []
         self.muted: dict[int, str] = {}  # chat id -> label for .rules
-        self.control_chat_id: int | None = None
+        # Whether the userbot has already pressed /start in the panel bot for me.
+        self.panel_started = False
         self._next_id = 1
         if path.exists():
             data = json.loads(path.read_text(encoding="utf-8"))
             self.rules = [Rule(**r) for r in data.get("rules", [])]
             self.muted = {int(c): label for c, label in data.get("muted", {}).items()}
-            self.control_chat_id = data.get("control_chat_id")
+            self.panel_started = data.get("panel_started", False)
             self._next_id = data.get("next_id", 1)
 
     def add_rule(
@@ -52,8 +53,8 @@ class Store:
         self.save()
         return True
 
-    def set_control_chat(self, chat_id: int) -> None:
-        self.control_chat_id = chat_id
+    def set_panel_started(self) -> None:
+        self.panel_started = True
         self.save()
 
     def should_delete(self, chat_id: int, is_private: bool, message: str) -> bool:
@@ -76,7 +77,7 @@ class Store:
     def save(self) -> None:
         data = {
             "next_id": self._next_id,
-            "control_chat_id": self.control_chat_id,
+            "panel_started": self.panel_started,
             "rules": [r.to_dict() for r in self.rules],
             "muted": {str(c): label for c, label in sorted(self.muted.items())},
         }
