@@ -402,7 +402,7 @@ function personaScreen() {
 function ai() {
   const chats = state.chats.map((c) => row({
     avatar: avatar(c.label, c.id), title: nameOf(c.label, c.id), chevron: true,
-    sub: [c.drafts ? "📝 черновики" : "отвечает сам", showModel(c) ? (c.model === "deepseek" ? "DeepSeek" : "Claude") : null,
+    sub: [c.paused_until ? `⏸ ты в чате до ${pausedTill(c)}` : c.drafts ? "📝 черновики" : "отвечает сам", showModel(c) ? (c.model === "deepseek" ? "DeepSeek" : "Claude") : null,
       c.persona ? "свой характер" : null].filter(Boolean).join(" · "),
     right: c.auto ? h("span", {class: "tag"}, "незнакомец") : null,
     onclick: () => push(chatScreen(c.id)),
@@ -412,6 +412,10 @@ function ai() {
     section("", [row({icon: "＋", title: "Добавить чат", cls: "link", onclick: () => push(addChatScreen)}), ...chats],
       (chats.length ? "" : "Список пуст. ") + "Незнакомцы, написавшие первыми, попадают сюда сами."),
   ];
+}
+
+function pausedTill(c) {
+  return new Date(c.paused_until * 1000).toLocaleTimeString("ru-RU", {hour: "2-digit", minute: "2-digit"});
 }
 
 function chatScreen(id) {
@@ -439,7 +443,9 @@ function chatScreen(id) {
       h("div", {class: "caption"}, "Режим"),
       h("div", {class: "group pad"}, seg([["", "Отвечает сам"], ["draft", "Черновики"]], c.drafts ? "draft" : "",
         (v) => run("ai", v, where))),
-      h("div", {class: "footer"}, c.drafts ? "ИИ готовит черновик, отправляю я." : "ИИ отвечает сам, в пределах лимитов."),
+      h("div", {class: "footer"}, c.paused_until
+        ? `Ты пишешь здесь сам: ИИ молчит до ${pausedTill(c)}, пока ты не замолчишь на ${state.takeover_minutes} мин.`
+        : c.drafts ? "ИИ готовит черновик, отправляю я." : "ИИ отвечает сам, в пределах лимитов."),
       showModel(c) ? [h("div", {class: "caption"}, "Модель"),
         h("div", {class: "group pad"}, seg([["claude", "Claude"], ["deepseek", "DeepSeek 🐉"]], c.model,
           (v) => run("model", v, where)))] : null,
@@ -449,6 +455,8 @@ function chatScreen(id) {
           c.persona ? btn("Сбросить", () => run("persona", "-", where), "bad small") : null)],
         "Пусто — общий характер."),
       section("Сейчас", [
+        c.paused_until ? row({icon: "▶️", tint: "#34c759", title: "Вернуть ИИ сейчас", cls: "link",
+          sub: `сейчас молчит до ${pausedTill(c)}`, onclick: () => run("ai", c.drafts ? "draft" : "", where)}) : null,
         row({icon: "✍️", tint: "#007aff", title: "Ответить сам", sub: "ИИ ответит в чат сразу", cls: "link",
           onclick: () => run("ans", "", where)}),
         // Not a button as a whole: the stepper's buttons live inside it.

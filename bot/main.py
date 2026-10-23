@@ -228,7 +228,7 @@ def setup_userbot(
         # A forwarded message is someone else's text, even if it starts with a dot.
         cmd = None if event.fwd_from else commands.parse(event.raw_text)
         if cmd is None:
-            if ai is not None and event.is_private:
+            if ai is not None:
                 await ai.on_outgoing(event)
             return
         log.info("Command %r in %s, reply to %s", event.raw_text, event.chat_id, event.reply_to_msg_id)
@@ -338,6 +338,7 @@ async def run() -> None:
                         settings.deepseek_price_output),
             ) if settings.deepseek_api_key else None,
             show_draft=show_draft, media_reply=settings.ai_media_reply,
+            takeover_seconds=settings.ai_takeover_minutes * 60,
         )
         ai.resume_reports()
     setup_userbot(

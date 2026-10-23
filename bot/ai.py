@@ -15,7 +15,9 @@ Safety lives in code, not just the prompt:
 - Per-chat and total daily limits cap the spend, and a stranger gets a fixed
   number of replies, ever; then the AI hands the chat over to me. Private
   chats with people I know can be let off the daily limits (known_unlimited).
-- If I write in an automatic chat myself, the AI steps out of it for good.
+- If I write in an automatic chat myself, the AI steps out of it for good. In
+  a chat I added, it keeps quiet until I've been silent for a while
+  (takeover_seconds): I'm talking there myself.
 
 A chat can be switched to DeepSeek (".model deepseek", see bot.deepseek): same
 safety in code, and the "leave delicate topics to me" rule is off there, so a
@@ -199,7 +201,7 @@ class AiResponder:
         me_name: str, notify: Callable[[str], Awaitable[None]], journal: Journal,
         known_unlimited: bool = False, deepseek: DeepSeek | None = None,
         show_draft: Callable[[int, str | None], Awaitable[None]] | None = None,
-        media_reply: str = "",
+        media_reply: str = "", takeover_seconds: int = 600,
     ):
         self.client = client
         self.store = store
@@ -222,6 +224,8 @@ class AiResponder:
         # Sent in reply to a voice message or a video; empty = say nothing.
         self.media_reply = media_reply
         self._media_cooldown = Cooldown(MEDIA_REPLY_COOLDOWN_SECONDS)
+        # After I write in a chat I added, the AI keeps quiet there this long.
+        self.takeover_seconds = takeover_seconds
         # Waiting out REPLY_DELAY_SECONDS; a new message restarts the wait.
         self._pending: dict[int, asyncio.Task] = {}
         # Asking Claude or sending right now: never cancelled midway (it's
@@ -245,6 +249,11 @@ class AiResponder:
         """Whether an outgoing message is the AI's, not mine."""
         return event.chat_id in self._sending or (event.chat_id, event.id) in self._sent
 
+    def paused(self, chat_id: int) -> bool:
+        """Whether I'm talking in this AI chat myself, so the AI keeps quiet."""
+        chat = self.store.ai_chats.get(chat_id)
+        return chat is not None and chat.paused_until > time.time()
+
     async def on_incoming(self, chat_id: int, sender, mention_id: int | None = None, message=None) -> bool:
         """An incoming message. True if the AI takes it (then keyword
         auto-replies stay out of it).
@@ -267,6 +276,8 @@ class AiResponder:
                 f"🆕 Незнакомый {label} #{chat_id} написал первым, ИИ ведёт разговор. "
                 f"Выключить: .noai #{chat_id}"
             )
+        if self.paused(chat_id):
+            return True  # I'm here myself: no keyword auto-replies either
         if message is not None and is_voice_or_video(message):
             await self._on_media(chat_id, mention_id)
             return True
@@ -291,15 +302,25 @@ class AiResponder:
         self._pending[chat_id] = asyncio.create_task(self._reply_later(chat_id))
 
     async def on_outgoing(self, event) -> None:
-        """A message I sent. In an automatic chat, writing myself means I take over."""
+        """A message I sent. In an automatic chat, writing myself means I take
+        over for good; in a chat I added, the AI keeps quiet for a while."""
         if not self.store.ai_enabled or self.is_own(event):
             return
         chat = self.store.ai_chats.get(event.chat_id)
-        if chat is None or not chat.auto:
+        if chat is None:
             return
-        self.store.set_ai(event.chat_id, False)
         self._cancel_report(event.chat_id)
-        await self.notify(f"Ты ответил {chat.label or event.chat_id} сам, ИИ из этого чата вышел")
+        if chat.auto:
+            self.store.set_ai(event.chat_id, False)
+            await self.notify(f"Ты ответил {chat.label or event.chat_id} сам, ИИ из этого чата вышел")
+            return
+        task = self._pending.pop(event.chat_id, None)
+        if task is not None:
+            task.cancel()
+        chat.paused_until = time.time() + self.takeover_seconds
+        # I've seen the chat: the next report starts after my message.
+        chat.reported_up_to = max(chat.reported_up_to, event.id)
+        self.store.save()
 
     async def _is_new_stranger(self, chat_id: int, sender) -> bool:
         if chat_id in self.store.ai_blocked or chat_id in self._not_new:
@@ -442,8 +463,8 @@ class AiResponder:
         manual = manual_label is not None
         mention = self._reply_to.pop(chat_id, None)
         chat = self.store.ai_chats.get(chat_id)
-        if not manual and (chat is None or not self.store.ai_enabled):
-            return  # turned off while we were waiting
+        if not manual and (chat is None or not self.store.ai_enabled or self.paused(chat_id)):
+            return  # turned off, or I came in, while we were waiting
         listed = chat is not None
         if chat is None:
             chat = AiChat(label=manual_label or "")
@@ -529,7 +550,7 @@ class AiResponder:
         # Things may have changed while the model was thinking. (A one-off answer
         # I asked for goes out regardless: it replies to a specific message.)
         if not manual:
-            if chat_id not in self.store.ai_chats or not self.store.ai_enabled:
+            if chat_id not in self.store.ai_chats or not self.store.ai_enabled or self.paused(chat_id):
                 return
             newest = await self._newest(chat_id)
             if newest is not None and newest.out:

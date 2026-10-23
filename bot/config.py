@@ -40,6 +40,9 @@ class Settings(BaseSettings):
     # Private chats with people I know (not strangers picked up on their own)
     # skip both daily caps. Set to false to put the caps back.
     ai_known_unlimited: bool = True
+    # I wrote in an AI chat with someone I know: the AI keeps quiet there
+    # until I've been silent this long.
+    ai_takeover_minutes: int = 10
     # The answer to a voice message or a video in an AI chat (the AI only
     # reads text). Empty = say nothing.
     ai_media_reply: str = "голосовые и видео сейчас не могу послушать, напиши текстом"

@@ -95,9 +95,11 @@ def build_app(assistant, bot_token: str, owner_id: int) -> web.Application:
             "persona": store.persona,
             "replies_today": journal.replies_today(),
             "daily_limit": ai.total_limit if ai else 0,
+            "takeover_minutes": ai.takeover_seconds // 60 if ai else 0,
             "chats": [
                 {
                     "id": c, "label": a.label, "auto": a.auto, "drafts": a.drafts, "replies": a.replies,
+                    "paused_until": a.paused_until if a.pause_left() else 0,
                     "model": store.chat_models.get(c) or "claude", "persona": store.chat_personas.get(c, ""),
                 }
                 for c, a in sorted(store.ai_chats.items(), key=lambda item: item[1].label.lower())

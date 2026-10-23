@@ -79,7 +79,7 @@ def ai_screen(store: Store):
     )
     rows = [
         [Button.inline(
-            f"🔕 {'🆕 ' if a.auto else ''}{'📝 ' if a.drafts else ''}"
+            f"🔕 {'⏸ ' if a.pause_left() else ''}{'🆕 ' if a.auto else ''}{'📝 ' if a.drafts else ''}"
             f"{'🐉 ' if store.chat_models.get(c) == DEEPSEEK else ''}{f'{a.label} #{c}'.strip()}",
             f"noai:{c}".encode(),
         )]

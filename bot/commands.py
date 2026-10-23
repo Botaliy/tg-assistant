@@ -175,6 +175,8 @@ def execute(store: Store, cmd: Command, chat_id: int | None, label: str = "") ->
         if on:
             # ".ai draft": drafts in the panel; ".ai" / ".ai on": answers by itself.
             changed = store.set_drafts(chat_id, cmd.arg == "draft") or changed
+            # I'm done talking there myself: the AI is back right away.
+            changed = store.resume_ai(chat_id) or changed
         if on and not store.ai_enabled:
             # An error so that it reaches the panel even from a conversation.
             return error(f"{label or chat_id} в списке ИИ, но сам ИИ выключен: включи его в пульте (.ai on или кнопкой)")
@@ -259,7 +261,8 @@ def format_rules(store: Store, chat_id: int | None) -> str:
     if muted:
         lines.append("Заглушены: " + ", ".join(muted))
     ai = [
-        f"{'🆕 ' if a.auto else ''}{'📝 ' if a.drafts else ''}{a.label} #{c}".strip()
+        f"{'🆕 ' if a.auto else ''}{'📝 ' if a.drafts else ''}{a.label} #{c}"
+        f"{f' (⏸ ты в чате, ещё {left} мин)' if (left := a.pause_left()) else ''}".strip()
         for c, a in sorted(store.ai_chats.items())
         if chat_id is None or c == chat_id
     ]

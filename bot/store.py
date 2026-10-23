@@ -1,4 +1,6 @@
 import json
+import math
+import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -20,6 +22,12 @@ class AiChat:
     # The AI doesn't send here, it brings a draft to the panel (".ai draft").
     drafts: bool = False
     reported_up_to: int = 0  # last message id covered by a report to the panel
+    # I wrote here myself: the AI keeps quiet until then (a unix time).
+    paused_until: float = 0.0
+
+    def pause_left(self) -> int:
+        """Minutes the AI still keeps quiet because I wrote here; 0: none."""
+        return max(0, math.ceil((self.paused_until - time.time()) / 60))
 
 
 class Store:
@@ -117,6 +125,16 @@ class Store:
         if chat is None or chat.drafts == drafts:
             return False
         chat.drafts = drafts
+        self.save()
+        return True
+
+    def resume_ai(self, chat_id: int) -> bool:
+        """Ends a pause I caused by writing in an AI chat. Returns False if
+        there was none."""
+        chat = self.ai_chats.get(chat_id)
+        if chat is None or not chat.paused_until:
+            return False
+        chat.paused_until = 0.0
         self.save()
         return True
 
