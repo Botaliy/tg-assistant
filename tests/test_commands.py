@@ -158,3 +158,14 @@ def test_model_per_chat(store):
     assert store.chat_models == {}
     assert run(store, ".model gpt", chat_id=5).is_error
     assert run(store, ".model deepseek").is_error  # whose?
+
+
+def test_insult_filter_for_a_chat(store):
+    assert run(store, ".filter ai").is_error  # needs a chat
+    assert run(store, ".filter ai", chat_id=5, label="@vasya").text == "Удаляю оскорбления для @vasya"
+    assert store.insult_filter == {5: "@vasya"}
+    assert store.rules == []  # not a keyword rule for the word "ai"
+    assert "Удаляю оскорбления: @vasya #5" in run(store, ".rules").text
+    assert run(store, ".filter ai off", chat_id=5, label="@vasya").text == "Больше не удаляю оскорбления для @vasya"
+    assert store.insult_filter == {}
+    assert Store(store.path).insult_filter == {}

@@ -18,6 +18,7 @@ from bot.store import Store
 
 if TYPE_CHECKING:
     from bot.ai import AiResponder
+    from bot.insults import InsultFilter
     from bot.journal import Draft
 
 log = logging.getLogger("tg-assistant")
@@ -209,6 +210,8 @@ class Assistant:
             return Answer("Собираю бэкап…")
         if cmd.name == "ai" and not self.ai_available:
             return error(commands.NO_AI)
+        if cmd.name == "filter" and cmd.arg.lower() == "ai" and not self.ai_available:
+            return error(commands.NO_AI)
         if cmd.name == "model" and commands.MODELS.get(cmd.arg.lower()) and not self.deepseek_available:
             return error(commands.NO_DEEPSEEK)
         return commands.execute(self.store, cmd, chat_id, label)
@@ -217,7 +220,7 @@ class Assistant:
 def setup_userbot(
     client: TelegramClient, assistant: Assistant, store: Store,
     cooldown: Cooldown, notify: Callable[[str], Awaitable[None]], panel_id: int,
-    ai: "AiResponder | None",
+    ai: "AiResponder | None", insults: "InsultFilter | None" = None,
 ) -> None:
     @client.on(events.NewMessage(outgoing=True))
     async def on_command(event) -> None:
@@ -270,6 +273,19 @@ def setup_userbot(
             await assistant.delete(event.chat_id, [event.id])
             log.info("Auto-deleted message %s in %s", event.id, event.chat_id)
             return
+        # Claude reads every message there, so it goes first: nothing else
+        # (the AI, auto-replies) should react to an insult.
+        if (
+            insults is not None and event.chat_id in store.insult_filter
+            and await insults.is_insult(event.chat_id, text, store.insult_filter[event.chat_id])
+        ):
+            label = store.insult_filter[event.chat_id] or str(event.chat_id)
+            if await assistant.delete(event.chat_id, [event.id]):
+                log.info("Deleted an insult %s in %s", event.id, event.chat_id)
+                await notify(f"🤬 [{label}] удалил оскорбление: {commands.short(text, 200)}")
+            else:
+                await notify(f"🤬 [{label}] оскорбление, но удалить не получилось: {commands.short(text, 200)}")
+            return
 
         sender = await event.get_sender()
         if getattr(sender, "bot", False):
@@ -319,16 +335,19 @@ async def run() -> None:
         except (RPCError, ValueError) as e:
             log.warning("Can't reach the panel: %s", e)
 
-    ai = None
+    ai = insults = None
     if settings.anthropic_api_key:
         # Imported only when needed: the SDK adds ~35 MB to a 60 MB process.
         import anthropic
 
         from bot.ai import AiResponder
         from bot.deepseek import DeepSeek
+        from bot.insults import InsultFilter
 
+        api = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+        insults = InsultFilter(api, settings.ai_filter_model, journal, settings.ai_filter_daily_per_chat, notify)
         ai = AiResponder(
-            client, store, anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key),
+            client, store, api,
             settings.ai_model, settings.ai_effort, settings.ai_daily_per_chat,
             settings.ai_daily_total, settings.ai_stranger_limit, utils.get_display_name(me), notify,
             journal, known_unlimited=settings.ai_known_unlimited,
@@ -342,7 +361,7 @@ async def run() -> None:
         )
         ai.resume_reports()
     setup_userbot(
-        client, assistant, store, Cooldown(settings.reply_cooldown_seconds), notify, bot_me.id, ai,
+        client, assistant, store, Cooldown(settings.reply_cooldown_seconds), notify, bot_me.id, ai, insults,
     )
     assistant.ai = ai
     panel.setup(bot, assistant, store, owner_id=me.id, webapp_url=settings.webapp_url)

@@ -37,6 +37,8 @@ class Store:
         self.path = path
         self.rules: list[Rule] = []
         self.muted: dict[int, str] = {}  # chat id -> label for .rules
+        # Chats where Claude deletes insults (".filter ai"): chat id -> label.
+        self.insult_filter: dict[int, str] = {}
         # Whether the userbot has already pressed /start in the panel bot for me.
         self.panel_started = False
         self.ai_chats: dict[int, AiChat] = {}
@@ -55,6 +57,7 @@ class Store:
             data = json.loads(path.read_text(encoding="utf-8"))
             self.rules = [Rule(**r) for r in data.get("rules", [])]
             self.muted = {int(c): label for c, label in data.get("muted", {}).items()}
+            self.insult_filter = {int(c): label for c, label in data.get("insult_filter", {}).items()}
             self.panel_started = data.get("panel_started", False)
             fields = set(AiChat.__dataclass_fields__)
             self.ai_chats = {
@@ -97,6 +100,17 @@ class Store:
             self.muted[chat_id] = label
         else:
             del self.muted[chat_id]
+        self.save()
+        return True
+
+    def set_insult_filter(self, chat_id: int, on: bool, label: str = "") -> bool:
+        """Returns False if the chat was already in that state."""
+        if (chat_id in self.insult_filter) == on:
+            return False
+        if on:
+            self.insult_filter[chat_id] = label
+        else:
+            del self.insult_filter[chat_id]
         self.save()
         return True
 
@@ -190,6 +204,7 @@ class Store:
             "panel_started": self.panel_started,
             "rules": [r.to_dict() for r in self.rules],
             "muted": {str(c): label for c, label in sorted(self.muted.items())},
+            "insult_filter": {str(c): label for c, label in sorted(self.insult_filter.items())},
             "ai_enabled": self.ai_enabled,
             "ai_chats": {str(c): asdict(a) for c, a in sorted(self.ai_chats.items())},
             "ai_blocked": sorted(self.ai_blocked),

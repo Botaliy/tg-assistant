@@ -37,7 +37,8 @@ HELP = """Всё есть на кнопках в /menu. Перешли сюда 
 .mute @user / .unmute @user — удалять все новые сообщения от него / перестать
 .reply ключ1, ключ2 => ответ — автоответ во всех личках
 .reply @user ключ1, ключ2 => ответ — автоответ только ему
-.filter [@user] ключ1, ключ2 — удалять сообщения с этими словами
+.filter [@user] ключ1, ключ2 — удалять сообщения с этими словами (казин* — и «казиношка»)
+.filter @user ai / .filter @user ai off — Claude удаляет его оскорбления / перестать
 .del @user N — удалить его последние N сообщений
 .rules [@user] — список правил
 .unrule N — удалить правило N
@@ -63,6 +64,7 @@ HELP = """Всё есть на кнопках в /menu. Перешли сюда 
 .ans — ИИ разово отвечает на последние сообщения (ответом на сообщение — реплаем на него)
 .draft [N] — то же, но черновиком в пульт, по последним N сообщениям
 .ai draft — ИИ в этом чате только присылает черновики в пульт
+.filter ai / .filter ai off — Claude удаляет оскорбления в этом чате / перестать
 .sum [N] — выжимка последних N сообщений чата в пульт (без N — непрочитанного)
 .ai on / .ai off — включить / выключить ИИ только в этом чате (.ai off = .noai)
 .model deepseek / .model claude — чем ИИ отвечает в этом чате
@@ -217,6 +219,15 @@ def execute(store: Store, cmd: Command, chat_id: int | None, label: str = "") ->
         rule = store.add_rule(REPLY, keywords, answer, chat_id, label)
         return Answer(f"Правило {rule.id}: отвечаю {scope} на «{', '.join(keywords)}»")
 
+    if cmd.name == "filter" and cmd.arg.lower() in ("ai", "ai off"):
+        if chat_id is None:
+            return error("Для какого чата? Формат: .filter @user ai")
+        on = cmd.arg.lower() == "ai"
+        changed = store.set_insult_filter(chat_id, on, label)
+        if on:
+            return Answer(f"Удаляю оскорбления {scope}" if changed else f"Оскорбления {scope} уже удаляются")
+        return Answer(f"Больше не удаляю оскорбления {scope}" if changed else f"Оскорбления {scope} и не удалялись")
+
     if cmd.name == "filter":
         keywords = split_keywords(cmd.arg)
         if not keywords:
@@ -260,6 +271,12 @@ def format_rules(store: Store, chat_id: int | None) -> str:
     ]
     if muted:
         lines.append("Заглушены: " + ", ".join(muted))
+    insults = [
+        f"{label} #{c}".strip() for c, label in sorted(store.insult_filter.items())
+        if chat_id is None or c == chat_id
+    ]
+    if insults:
+        lines.append("Удаляю оскорбления: " + ", ".join(insults))
     ai = [
         f"{'🆕 ' if a.auto else ''}{'📝 ' if a.drafts else ''}{a.label} #{c}"
         f"{f' (⏸ ты в чате, ещё {left} мин)' if (left := a.pause_left()) else ''}".strip()

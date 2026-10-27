@@ -46,6 +46,12 @@ class Settings(BaseSettings):
     # The answer to a voice message or a video in an AI chat (the AI only
     # reads text). Empty = say nothing.
     ai_media_reply: str = "голосовые и видео сейчас не могу послушать, напиши текстом"
+    # Reads each incoming message in chats with ".filter @user ai": a cheap
+    # model is enough for a yes/no.
+    ai_filter_model: str = "claude-haiku-5-5"
+    # Checks per chat per day, so a flood can't run up the bill; past it the
+    # messages stay unchecked until tomorrow.
+    ai_filter_daily_per_chat: int = 300
     # DeepSeek for chats switched to it (".model deepseek"), from
     # https://platform.deepseek.com. Empty key = only Claude.
     deepseek_api_key: str = ""

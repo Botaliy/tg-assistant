@@ -510,12 +510,18 @@ function rules() {
     avatar: avatar(m.label, m.id), title: nameOf(m.label, m.id),
     right: btn("Вернуть", () => run("unmute", "", {chat_id: m.id}), "soft small"),
   }));
+  const insultRows = s.insult_filter.map((m) => row({
+    avatar: avatar(m.label, m.id), title: nameOf(m.label, m.id),
+    right: btn("Выключить", () => run("filter", "ai off", {chat_id: m.id}), "soft small"),
+  }));
   return [
     head("Правила"),
     section("", [row({icon: "＋", title: "Новое правило", cls: "link", onclick: () => push(ruleScreen)}), ...ruleRows],
       "Автоответ отвечает на ключевые слова, фильтр удаляет такие сообщения."),
     section("Заглушённые", [row({icon: "🔇", tint: "#8e8e93", title: "Заглушить", cls: "link", onclick: () => push(muteScreen)}),
       ...mutedRows], "Все их новые сообщения удаляются у обоих."),
+    section("Удалять оскорбления", [row({icon: "🤬", tint: "#ff9500", title: "Добавить чат", cls: "link", onclick: () => push(insultScreen)}),
+      ...insultRows], "Claude читает каждое входящее сообщение в этих чатах и удаляет оскорбительные у обоих."),
   ];
 }
 
@@ -549,6 +555,18 @@ function ruleScreen() {
     section("Ключевые слова", [keywords], "Через запятую. Сработает, если в сообщении есть любое."),
     textPart,
     h("div", {class: "btns"}, btn("Добавить", add)),
+  ];
+}
+
+function insultScreen() {
+  const target = h("input", {class: "field", placeholder: "@username или +телефон", autocapitalize: "off"});
+  return [
+    head("Удалять оскорбления"),
+    section("Где", [target], "Оскорбления удаляются у обоих, о каждом придёт сообщение в пульт."),
+    h("div", {class: "btns"}, btn("Включить", async () => {
+      if (!target.value.trim()) return toast("В каком чате?", true);
+      if (await run("filter", "ai", {target: target.value.trim()})) pop();
+    })),
   ];
 }
 

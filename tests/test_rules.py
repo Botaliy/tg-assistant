@@ -1,3 +1,5 @@
+import pytest
+
 from bot.rules import DELETE, REPLY, Cooldown, Rule
 
 
@@ -28,3 +30,33 @@ def test_cooldown():
     assert cooldown.ready("b")
     now[0] = 61
     assert cooldown.ready("a")
+
+
+@pytest.mark.parametrize("text", [
+    "кaзинo",  # Latin a and o
+    "К А З И Н О",
+    "к.а.з.и.н.о",
+    "к-а-з-и-н-о!",
+    "играй в к а з и н о",
+    "казиииино",
+    "каз\u200bино",  # a zero-width space inside
+    "к@зин0",
+])
+def test_sees_through_disguises(text):
+    assert Rule(id=1, kind=DELETE, keywords=["казино"]).matches(text)
+
+
+def test_star_is_a_prefix():
+    rule = Rule(id=1, kind=DELETE, keywords=["казин*"])
+    assert rule.matches("казиношка")
+    assert rule.matches("КАЗИНО")
+    assert not rule.matches("в магазине")
+
+
+def test_disguises_dont_widen_whole_words():
+    rule = Rule(id=1, kind=REPLY, keywords=["да", "сколько стоит", "casino"], text="x")
+    assert not rule.matches("когда")
+    assert not rule.matches("я в шоке")
+    assert rule.matches("СКОЛЬКО   стоит")
+    assert rule.matches("CASINO")
+    assert rule.matches("сasinо")  # Cyrillic с and о
