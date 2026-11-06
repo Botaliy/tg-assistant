@@ -24,6 +24,8 @@ An hour on, the rating closes: the buttons go, the card stays. The panel
 bot needs the message's id for that: it gets it from the first click, or
 right away with inline feedback on (@BotFather → /setinlinefeedback).
 
+A message with the joke button's words in it (in any case) is rated too.
+
 An album is one meme. Votes live in the journal, one score per person (a
 new click changes it), so restarts lose nothing.
 """
@@ -311,11 +313,16 @@ class MemeRatings:
             repeat = repeat_line((time.time() if now is None else now) - original[1], avg)
         return MemeView(scores, self.journal.meme_tally(token)[2], repeat)
 
+    def mentions_joke(self, message) -> bool:
+        """A text with the joke button's words in it, in any case, is a meme too."""
+        text = getattr(message, "raw_text", None) or ""
+        return bool(self.joke) and self.joke.casefold() in text.casefold()
+
     # The userbot's side: a meme in a chat -> the rating message under it.
 
     async def on_message(self, message) -> None:
         chat_id = message.chat_id
-        if chat_id not in self.store.memes or not is_meme(message):
+        if chat_id not in self.store.memes or not (is_meme(message) or self.mentions_joke(message)):
             return
         if message.grouped_id:
             if self._last_album.get(chat_id) == message.grouped_id:

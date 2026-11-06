@@ -429,3 +429,15 @@ def test_old_ten_point_votes_and_buttons_turn_into_five(tmp_path):
     old_button = Click(f"mr:{token_of(userbot)}:8", 21)  # a 1–10 card still in the chat
     asyncio.run(bot.handlers[-1](old_button))
     assert old_button.toast == "Твоя оценка: 4"
+
+
+def test_a_text_with_the_joke_in_it_is_rated_too(tmp_path):
+    ratings, userbot, _, _, _ = make(tmp_path, joke="Шутка дня")
+    for msg_id, text in ((1, "ну это ШУТКА ДНЯ, конечно"), (2, "просто текст"), (3, "")):
+        asyncio.run(ratings.on_message(message(msg_id=msg_id, photo=False, raw_text=text)))
+    assert [r for _, _, r in userbot.clicks] == [1]
+
+    (tmp_path / "x").mkdir()
+    plain, userbot, _, _, _ = make(tmp_path / "x", joke="")
+    asyncio.run(plain.on_message(message(photo=False, raw_text="что угодно")))
+    assert userbot.clicks == []
