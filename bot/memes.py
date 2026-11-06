@@ -1,7 +1,7 @@
 """Meme ratings (".memes"): in the chats I picked, every meme — a photo, a
 video or a GIF, mine or anyone's — gets a reply with buttons 1–10, plus a
 joke button if one is set. The average is in the message and changes with
-every click. ".top" shows the week's best memes and authors, and every
+every click, on one line with a bar. ".top" shows the week's best memes and authors, and every
 Sunday afternoon each chat gets it by itself.
 
 A userbot can't send buttons, so it sends the message through the panel
@@ -20,6 +20,10 @@ The card has a few jokes of its own: a verdict that follows the average
 photo or a file the chat has seen before, and 😏 next to the author who
 rated their own meme. The weekly top hands out nominations too.
 
+An hour on, the rating closes: the buttons go, the card stays. The panel
+bot needs the message's id for that: it gets it from the first click, or
+right away with inline feedback on (@BotFather → /setinlinefeedback).
+
 An album is one meme. Votes live in the journal, one score per person (a
 new click changes it), so restarts lose nothing.
 """
@@ -35,6 +39,7 @@ from dataclasses import dataclass, field
 
 from telethon import Button, TelegramClient, events, functions, types, utils
 from telethon.errors import MessageNotModifiedError, RPCError
+from telethon.extensions import BinaryReader
 
 from bot.journal import Journal
 from bot.store import Store
@@ -42,6 +47,9 @@ from bot.store import Store
 log = logging.getLogger("tg-assistant.memes")
 
 QUESTION = "Оцени мем"
+NOBODY = "😶 Никто не оценил"
+# After this long the rating closes: the buttons go, the card stays.
+CLOSE_AFTER_SECONDS = 3600
 SCORES = range(1, 11)
 CHECK_EVERY_SECONDS = 60
 TOP_DAYS = 7
@@ -127,13 +135,20 @@ def ago(seconds: float) -> str:
 
 
 def repeat_line(seconds_ago: float, avg: float | None) -> str:
-    return f"🔁 Баян! Уже было {ago(seconds_ago)}" + (f", набрал {avg:.1f}" if avg is not None else "")
+    return f"🔁 Баян · {ago(seconds_ago)}" + (f" · ⭐ {avg:.1f}" if avg is not None else "")
 
 
-def header(view: MemeView) -> str:
-    """The plain-text version of the card."""
+def summary(view: MemeView, closed: bool = False, with_bar: bool = True) -> str:
+    """The card's one line: the verdict, the average, the bar, how many voted."""
     avg = view.average
-    line = f"{QUESTION} 👇" if avg is None else f"{verdict(avg, view.scores)} · ⭐ {avg:.1f} ({votes(view.voters)})"
+    if avg is None:
+        return NOBODY if closed else f"{QUESTION} 👇"
+    return f"{verdict(avg, view.scores)} ⭐ {avg:.1f}" + (f" {bar(avg)}" if with_bar else " ·") + f" 👥 {view.voters}"
+
+
+def header(view: MemeView, closed: bool = False) -> str:
+    """The plain-text version of the card."""
+    line = summary(view, closed, with_bar=False)
     return f"{line}\n{view.repeat}" if view.repeat else line
 
 
@@ -144,20 +159,19 @@ def joke_label(joke: str, jokes: int) -> str:
     return f"{joke} · {jokes}" + (" 🚨" if jokes >= 5 else " 🔥" if jokes >= 3 else "")
 
 
-def card(view: MemeView) -> str:
-    """The rich message: the verdict and the average, a bar, and who gave
-    what in a collapsible table."""
+def card(view: MemeView, closed: bool = False) -> str:
+    """The rich message: one line with the verdict, the average, a bar and
+    how many voted, then who gave what in a collapsible table."""
     repeat = f"<p>{view.repeat}</p>" if view.repeat else ""
     avg = view.average
     if avg is None:
-        return f"<p><b>{QUESTION}</b> 👇</p>{repeat}"
+        return f"<p>{NOBODY if closed else f'<b>{QUESTION}</b> 👇'}</p>{repeat}"
     rows = "".join(
         f'<tr><td align="right"><b>{score}</b></td><td>{html.escape(", ".join(view.scores[score]))}</td></tr>'
         for score in sorted(view.scores, reverse=True)
     )
     return (
-        f"<p><b>{verdict(avg, view.scores)}</b> · ⭐ <b>{avg:.1f}</b></p>"
-        f"<p>{bar(avg)} · {votes(view.voters)}</p>{repeat}"
+        f"<p><b>{verdict(avg, view.scores)}</b> ⭐ <b>{avg:.1f}</b> {bar(avg)} 👥 {view.voters}</p>{repeat}"
         f"<details><summary>Кто сколько</summary><table compact>{rows}</table></details>"
     )
 
@@ -178,12 +192,13 @@ def score_style(score: int) -> dict:
 
 
 def buttons(token: int, joke: str = "", jokes: int = 0) -> list:
+    """Two rows, 1–5 and 6–10, the joke at the end of the second."""
     rows = [
         [button(str(n), f"{DATA}{token}:{n}", **score_style(n)) for n in SCORES[:5]],
         [button(str(n), f"{DATA}{token}:{n}", **score_style(n)) for n in SCORES[5:]],
     ]
     if joke:
-        rows.append([button(joke_label(joke, jokes), f"{DATA}{token}:j", bg_primary=True)])
+        rows[1].append(button(joke_label(joke, jokes), f"{DATA}{token}:j", bg_primary=True))
     return rows
 
 
@@ -226,11 +241,12 @@ def nominations(journal: Journal, chat_id: int, since: float, joke: str = "") ->
     return awards
 
 
-async def edit_rich(bot: TelegramClient, msg_id, rich_html: str, markup: list) -> None:
+async def edit_rich(bot: TelegramClient, msg_id, rich_html: str, markup: list | None) -> None:
     """Edits an inline message into a rich one, from the datacenter that
     holds it, as Telethon's own edit_message does for plain text."""
     request = functions.messages.EditInlineBotMessageRequest(
-        id=msg_id, rich_message=types.InputRichMessageHTML(rich_html), reply_markup=bot.build_reply_markup(markup),
+        id=msg_id, rich_message=types.InputRichMessageHTML(rich_html),
+        reply_markup=bot.build_reply_markup(markup) if markup else None,
     )
     if bot.session.dc_id == msg_id.dc_id:
         await bot(request)
@@ -263,6 +279,7 @@ class MemeRatings:
         # sent: my handlers mustn't take it for me writing there.
         self._sending: set[int] = set()
         self._sent: set[tuple[int, int]] = set()
+        self._bot: TelegramClient | None = None  # the panel bot, once set up
 
     def is_own(self, event) -> bool:
         """Whether an outgoing message is a rating or a top from here, not mine."""
@@ -338,7 +355,39 @@ class MemeRatings:
 
     # The panel bot's side: the inline answer and the clicks.
 
+    def is_closed(self, token: int, now: float | None = None) -> bool:
+        meme = self.journal.get_meme(token)
+        return meme is not None and (time.time() if now is None else now) - meme[1] >= CLOSE_AFTER_SECONDS
+
+    async def show(self, token: int, msg_id, closed: bool = False) -> None:
+        """Edits the rating message into what the journal has now; a closed
+        one loses its buttons."""
+        view = self.view(token)
+        markup = None if closed else buttons(token, self.joke, view.jokes)
+        try:
+            if self.journal.meme_is_rich(token):
+                await edit_rich(self._bot, msg_id, card(view, closed), markup)
+            else:
+                await self._bot.edit_message(msg_id, header(view, closed), buttons=markup)
+        except MessageNotModifiedError:
+            pass
+        except RPCError as e:
+            log.warning("Can't update a meme rating: %s", e)
+
+    async def close_old(self, now: float | None = None) -> None:
+        """Ratings older than CLOSE_AFTER_SECONDS: the buttons go. Only the
+        ones whose message the panel bot knows (from a click or the inline
+        feedback); the rest close on their next click."""
+        if self._bot is None:
+            return
+        before = (time.time() if now is None else now) - CLOSE_AFTER_SECONDS
+        for token, inline_id in self.journal.memes_to_close(before):
+            self.journal.close_meme(token)  # first: a failing edit isn't retried every minute
+            await self.show(token, BinaryReader(inline_id).tgread_object(), closed=True)
+
     def setup_bot(self, bot: TelegramClient, owner_id: int) -> None:
+        self._bot = bot
+
         @bot.on(events.InlineQuery())
         async def on_inline(event) -> None:
             text = event.text or ""
@@ -366,13 +415,26 @@ class MemeRatings:
                 )],
             ))
 
+        @bot.on(events.Raw(types.UpdateBotInlineSend))
+        async def on_inline_sent(update) -> None:
+            """With inline feedback on (@BotFather → /setinlinefeedback), the
+            rating message's id comes right away, so it closes even if nobody
+            clicks."""
+            if update.user_id == owner_id and update.msg_id is not None and update.id.isdigit():
+                self.journal.set_meme_inline(int(update.id), bytes(update.msg_id))
+
         @bot.on(events.CallbackQuery(pattern=DATA.encode()))
         async def on_click(event) -> None:
             _, token, choice = event.data.decode().split(":")
             token = int(token)
-            rich = self.journal.meme_is_rich(token)
-            if rich is None:
+            if self.journal.meme_is_rich(token) is None:
                 await event.answer("Этот мем уже не оценить")
+                return
+            self.journal.set_meme_inline(token, bytes(event.query.msg_id))
+            if self.is_closed(token):
+                self.journal.close_meme(token)
+                await self.show(token, event.query.msg_id, closed=True)
+                await event.answer("⏰ Голосование уже закрыто")
                 return
             if choice == "j":
                 pressed = self.journal.toggle_meme_joke(token, event.sender_id)
@@ -385,17 +447,7 @@ class MemeRatings:
                 name = getattr(voter, "first_name", None) or (utils.get_display_name(voter) if voter else "")
                 self.journal.vote_meme(token, event.sender_id, int(choice), name)
                 toast = f"Твоя оценка: {choice}"
-            view = self.view(token)
-            markup = buttons(token, self.joke, view.jokes)
-            try:
-                if rich:
-                    await edit_rich(bot, event.query.msg_id, card(view), markup)
-                else:
-                    await bot.edit_message(event.query.msg_id, header(view), buttons=markup)
-            except MessageNotModifiedError:
-                pass
-            except RPCError as e:
-                log.warning("Can't update a meme rating: %s", e)
+            await self.show(token, event.query.msg_id)
             await event.answer(toast)
 
     # The top.
@@ -424,8 +476,12 @@ class MemeRatings:
                 log.warning("Can't post the weekly meme top in %s: %s", chat_id, e)
 
     async def run(self) -> None:
-        """Sends the weekly top when it's time, forever."""
+        """Closes old ratings and sends the weekly top when it's time, forever."""
         while True:
+            try:
+                await self.close_old()
+            except Exception:
+                log.exception("Closing old meme ratings failed")
             try:
                 await self.weekly_top()
             except Exception:

@@ -39,7 +39,8 @@ CREATE TABLE IF NOT EXISTS drafts (
 CREATE TABLE IF NOT EXISTS memes (
     token INTEGER PRIMARY KEY, chat_id INTEGER NOT NULL, meme_id INTEGER NOT NULL,
     author_id INTEGER, author TEXT NOT NULL, ts REAL NOT NULL,
-    rich INTEGER NOT NULL DEFAULT 0, media_id INTEGER, repeat_of INTEGER
+    rich INTEGER NOT NULL DEFAULT 0, media_id INTEGER, repeat_of INTEGER,
+    inline_id BLOB, closed INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS memes_chat_ts ON memes (chat_id, ts);
 CREATE TABLE IF NOT EXISTS meme_votes (
@@ -111,6 +112,8 @@ class Journal:
             ("memes", "rich INTEGER NOT NULL DEFAULT 0"),
             ("memes", "media_id INTEGER"),
             ("memes", "repeat_of INTEGER"),
+            ("memes", "inline_id BLOB"),
+            ("memes", "closed INTEGER NOT NULL DEFAULT 0"),
             ("meme_votes", "name TEXT NOT NULL DEFAULT ''"),
         ):
             try:
@@ -238,6 +241,19 @@ class Journal:
         """None: no such meme."""
         row = self.db.execute("SELECT rich FROM memes WHERE token = ?", (token,)).fetchone()
         return None if row is None else bool(row[0])
+
+    def set_meme_inline(self, token: int, inline_id: bytes) -> None:
+        """The rating message's inline id (serialized), to edit it later."""
+        self.db.execute("UPDATE memes SET inline_id = ? WHERE token = ?", (inline_id, token))
+
+    def memes_to_close(self, before: float) -> list[tuple[int, bytes]]:
+        """Open ratings older than a time whose message I can edit: token, inline id."""
+        return self.db.execute(
+            "SELECT token, inline_id FROM memes WHERE closed = 0 AND ts < ? AND inline_id IS NOT NULL", (before,),
+        ).fetchall()
+
+    def close_meme(self, token: int) -> None:
+        self.db.execute("UPDATE memes SET closed = 1 WHERE token = ?", (token,))
 
     def meme_scores(self, token: int) -> dict[int, list[tuple[int, str]]]:
         """Score -> who gave it (user id, name), in the order they voted."""
