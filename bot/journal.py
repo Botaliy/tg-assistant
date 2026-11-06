@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS memes (
 CREATE INDEX IF NOT EXISTS memes_chat_ts ON memes (chat_id, ts);
 CREATE TABLE IF NOT EXISTS meme_votes (
     token INTEGER NOT NULL, user_id INTEGER NOT NULL, score INTEGER, joke INTEGER NOT NULL DEFAULT 0,
+    name TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (token, user_id)
 );
 """
@@ -106,7 +107,10 @@ class Journal:
         self.db = sqlite3.connect(str(path), isolation_level=None)  # autocommit
         self.db.executescript(SCHEMA)
         # Columns added after a table was first made.
-        for table, column in (("memes", "rich INTEGER NOT NULL DEFAULT 0"),):
+        for table, column in (
+            ("memes", "rich INTEGER NOT NULL DEFAULT 0"),
+            ("meme_votes", "name TEXT NOT NULL DEFAULT ''"),
+        ):
             try:
                 self.db.execute(f"ALTER TABLE {table} ADD COLUMN {column}")
             except sqlite3.OperationalError:
@@ -219,17 +223,20 @@ class Journal:
         row = self.db.execute("SELECT rich FROM memes WHERE token = ?", (token,)).fetchone()
         return None if row is None else bool(row[0])
 
-    def meme_scores(self, token: int) -> dict[int, int]:
-        """Score -> how many people gave it."""
-        return dict(self.db.execute(
-            "SELECT score, COUNT(*) FROM meme_votes WHERE token = ? AND score IS NOT NULL GROUP BY score", (token,),
-        ).fetchall())
+    def meme_scores(self, token: int) -> dict[int, list[str]]:
+        """Score -> who gave it, in the order they voted."""
+        scores: dict[int, list[str]] = {}
+        for score, name in self.db.execute(
+            "SELECT score, name FROM meme_votes WHERE token = ? AND score IS NOT NULL ORDER BY rowid", (token,),
+        ):
+            scores.setdefault(score, []).append(name or "кто-то")
+        return scores
 
-    def vote_meme(self, token: int, user_id: int, score: int) -> None:
+    def vote_meme(self, token: int, user_id: int, score: int, name: str = "") -> None:
         self.db.execute(
-            "INSERT INTO meme_votes (token, user_id, score) VALUES (?, ?, ?) "
-            "ON CONFLICT (token, user_id) DO UPDATE SET score = excluded.score",
-            (token, user_id, score),
+            "INSERT INTO meme_votes (token, user_id, score, name) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT (token, user_id) DO UPDATE SET score = excluded.score, name = excluded.name",
+            (token, user_id, score, name),
         )
 
     def toggle_meme_joke(self, token: int, user_id: int) -> bool:

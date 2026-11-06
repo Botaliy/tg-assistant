@@ -21,6 +21,7 @@ new click changes it), so restarts lose nothing.
 
 import asyncio
 import datetime
+import html
 import logging
 import random
 from collections.abc import Awaitable, Callable
@@ -40,7 +41,6 @@ TOP_DAYS = 7
 SUNDAY = 6
 QUERY = "meme "  # the inline query: "meme <token>", or "meme <token> plain"
 PLAIN = " plain"
-BAR_WIDTH = 8
 DATA = "mr:"  # button data: "mr:<token>:<score or j>"
 NO_INLINE = (
     "🗳 Не получается прислать оценку мема: включи inline-режим у пульта — "
@@ -67,29 +67,51 @@ def votes(n: int) -> str:
     return f"{n} {plural(n, 'голос', 'голоса', 'голосов')}"
 
 
+# The verdict the card shows: below this average -> these words.
+VERDICTS = ((3, "💀 Кринж"), (5, "😐 Так себе"), (7, "🙂 Норм"), (9, "😂 Годнота"), (11, "🔥 Шедевр"))
+# What the joke button says back, at random.
+JOKE_TOASTS = ("😏 Засчитано", "📝 Записал в протокол", "🫡 Принято", "🤝 Ты не один такой", "🗿 Факт")
+JOKE_UNDO_TOASTS = ("🙊 Беру слова назад", "🤐 Ладно, замяли")
+
+
+def verdict(avg: float) -> str:
+    return next(words for limit, words in VERDICTS if avg < limit)
+
+
+def bar(avg: float) -> str:
+    filled = round(avg)
+    return "▰" * filled + "▱" * (10 - filled)
+
+
 def header(avg: float | None, voters: int) -> str:
+    """The plain-text version of the card."""
     if avg is None:
         return f"{QUESTION} 👇"
-    return f"{QUESTION} · ⭐ {avg:.1f} ({votes(voters)})"
+    return f"{verdict(avg)} · ⭐ {avg:.1f} ({votes(voters)})"
 
 
-def card(scores: dict[int, int]) -> str:
-    """The rich message: the average in bold, and how people voted in a
-    collapsible table with bars."""
-    voters = sum(scores.values())
+def joke_label(joke: str, jokes: int) -> str:
+    """The joke button gets louder the more people press it."""
+    if not jokes:
+        return joke
+    return f"{joke} · {jokes}" + (" 🚨" if jokes >= 5 else " 🔥" if jokes >= 3 else "")
+
+
+def card(scores: dict[int, list[str]]) -> str:
+    """The rich message: the verdict and the average, a bar, and who gave
+    what in a collapsible table."""
+    voters = sum(len(names) for names in scores.values())
     if not voters:
         return f"<p><b>{QUESTION}</b> 👇</p>"
-    avg = sum(score * n for score, n in scores.items()) / voters
-    most = max(scores.values())
+    avg = sum(score * len(names) for score, names in scores.items()) / voters
     rows = "".join(
-        f'<tr><td align="right"><b>{score}</b></td>'
-        f'<td>{"▰" * max(1, round(BAR_WIDTH * scores[score] / most))}</td>'
-        f'<td align="right">{scores[score]}</td></tr>'
+        f'<tr><td align="right"><b>{score}</b></td><td>{html.escape(", ".join(scores[score]))}</td></tr>'
         for score in sorted(scores, reverse=True)
     )
     return (
-        f"<p><b>{QUESTION}</b> · ⭐ <b>{avg:.1f}</b> из 10 · {votes(voters)}</p>"
-        f"<details><summary>Как голосовали</summary><table compact>{rows}</table></details>"
+        f"<p><b>{verdict(avg)}</b> · ⭐ <b>{avg:.1f}</b></p>"
+        f"<p>{bar(avg)} · {votes(voters)}</p>"
+        f"<details><summary>Кто сколько</summary><table compact>{rows}</table></details>"
     )
 
 
@@ -114,8 +136,7 @@ def buttons(token: int, joke: str = "", jokes: int = 0) -> list:
         [button(str(n), f"{DATA}{token}:{n}", **score_style(n)) for n in SCORES[5:]],
     ]
     if joke:
-        label = f"{joke} · {jokes}" if jokes else joke
-        rows.append([button(label, f"{DATA}{token}:j", bg_primary=True)])
+        rows.append([button(joke_label(joke, jokes), f"{DATA}{token}:j", bg_primary=True)])
     return rows
 
 
@@ -273,9 +294,14 @@ class MemeRatings:
                 return
             if choice == "j":
                 pressed = self.journal.toggle_meme_joke(token, event.sender_id)
-                toast = "😏" if pressed else "Передумал 🙂"
+                toast = random.choice(JOKE_TOASTS if pressed else JOKE_UNDO_TOASTS)
             else:
-                self.journal.vote_meme(token, event.sender_id, int(choice))
+                try:
+                    voter = await event.get_sender()
+                except (RPCError, ValueError):
+                    voter = None
+                name = getattr(voter, "first_name", None) or (utils.get_display_name(voter) if voter else "")
+                self.journal.vote_meme(token, event.sender_id, int(choice), name)
                 toast = f"Твоя оценка: {choice}"
             avg, voters, jokes = self.journal.meme_tally(token)
             markup = buttons(token, self.joke, jokes)

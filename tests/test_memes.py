@@ -6,7 +6,7 @@ from telethon import types
 
 from bot import commands
 from bot.journal import Journal
-from bot.memes import MemeRatings, card, format_top, header, is_meme, link, plural
+from bot.memes import MemeRatings, bar, card, format_top, header, is_meme, joke_label, link, plural, verdict
 from bot.store import Store
 
 OWNER = 1
@@ -105,13 +105,16 @@ class Inline:
 
 
 class Click:
-    def __init__(self, data, sender_id):
-        self.data, self.sender_id = data.encode(), sender_id
+    def __init__(self, data, sender_id, name="Петя"):
+        self.data, self.sender_id, self.name = data.encode(), sender_id, name
         self.query = SimpleNamespace(msg_id=SimpleNamespace(dc_id=2))
         self.toast = None
 
     async def answer(self, text=None):
         self.toast = text
+
+    async def get_sender(self):
+        return types.User(id=self.sender_id, first_name=self.name)
 
 
 def token_of(userbot):
@@ -188,14 +191,17 @@ def test_clicks_change_the_card_one_vote_per_person(tmp_path):
     token = token_of(userbot)
     on_click = bot.handlers[1]
 
-    for data, who in ((f"mr:{token}:10", 21), (f"mr:{token}:7", 22), (f"mr:{token}:4", 21)):
-        click = Click(data, who)
+    for data, who, name in ((f"mr:{token}:10", 21, "Петя"), (f"mr:{token}:7", 22, "Оля"), (f"mr:{token}:4", 21, "Петя")):
+        click = Click(data, who, name)
         asyncio.run(on_click(click))
     assert click.toast == "Твоя оценка: 4"
-    edit = bot.requests[-1]
-    assert edit.rich_message.html.startswith("<p><b>Оцени мем</b> · ⭐ <b>5.5</b> из 10 · 2 голоса</p>")
+    html = bot.requests[-1].rich_message.html
+    assert html.startswith("<p><b>🙂 Норм</b> · ⭐ <b>5.5</b></p><p>▰▰▰▰▰▰▱▱▱▱ · 2 голоса</p>")
+    assert "<b>7</b></td><td>Оля</td>" in html and "<b>4</b></td><td>Петя</td>" in html
 
-    asyncio.run(on_click(Click(f"mr:{token}:j", 23)))
+    joke = Click(f"mr:{token}:j", 23)
+    asyncio.run(on_click(joke))
+    assert joke.toast.startswith(("😏", "📝", "🫡", "🤝", "🗿"))
     assert labels(bot.requests[-1].reply_markup)[2] == ["шутка · 1"]
     assert "5.5" in bot.requests[-1].rich_message.html  # the joke isn't a score
     asyncio.run(on_click(Click(f"mr:{token}:j", 23)))
@@ -214,7 +220,7 @@ def test_falls_back_to_plain_text_and_edits_it_as_such(tmp_path):
     assert query.endswith(" plain") and reply_to == 7 and notes == []
     token = token_of(userbot)
     asyncio.run(bot.handlers[1](Click(f"mr:{token}:9", 21)))
-    assert bot.edits[-1][1] == "Оцени мем · ⭐ 9.0 (1 голос)" and bot.requests == []
+    assert bot.edits[-1][1] == "🔥 Шедевр · ⭐ 9.0 (1 голос)" and bot.requests == []
 
 
 def test_rich_can_be_turned_off(tmp_path):
@@ -225,10 +231,17 @@ def test_rich_can_be_turned_off(tmp_path):
 
 def test_card():
     assert card({}) == "<p><b>Оцени мем</b> 👇</p>"
-    html = card({10: 2, 9: 1, 3: 1})
-    assert html.startswith("<p><b>Оцени мем</b> · ⭐ <b>8.0</b> из 10 · 4 голоса</p><details><summary>")
+    html = card({10: ["Петя", "Оля"], 9: ["Вася"], 3: ["<Тимофей>"]})
+    assert html.startswith("<p><b>😂 Годнота</b> · ⭐ <b>8.0</b></p><p>▰▰▰▰▰▰▰▰▱▱ · 4 голоса</p><details>")
     assert html.index("<b>10</b>") < html.index("<b>9</b>") < html.index("<b>3</b>")
-    assert "<td>▰▰▰▰▰▰▰▰</td>" in html and "<td>▰▰▰▰</td>" in html
+    assert "<td>Петя, Оля</td>" in html and "<td>&lt;Тимофей&gt;</td>" in html
+
+
+def test_verdicts_bars_and_the_joke_getting_louder():
+    assert [verdict(a) for a in (1, 2.9, 3, 5, 7, 8.9, 9, 10)] == [
+        "💀 Кринж", "💀 Кринж", "😐 Так себе", "🙂 Норм", "😂 Годнота", "😂 Годнота", "🔥 Шедевр", "🔥 Шедевр"]
+    assert bar(7.6) == "▰▰▰▰▰▰▰▰▱▱" and bar(10) == "▰" * 10 and bar(1.2) == "▰" + "▱" * 9
+    assert [joke_label("шутка", n) for n in (0, 1, 3, 5)] == ["шутка", "шутка · 1", "шутка · 3 🔥", "шутка · 5 🚨"]
 
 
 def test_inline_mode_off_tells_the_panel_once(tmp_path):
@@ -290,7 +303,7 @@ def test_weekly_top_on_sunday_afternoon_once(tmp_path):
 def test_words():
     assert [plural(n, "голос", "голоса", "голосов") for n in (1, 2, 5, 11, 21, 22, 112)] == [
         "голос", "голоса", "голосов", "голосов", "голос", "голоса", "голосов"]
-    assert header(7.25, 1) == "Оцени мем · ⭐ 7.2 (1 голос)"
+    assert header(7.25, 1) == "😂 Годнота · ⭐ 7.2 (1 голос)"
     assert link(5, 3) == ""
 
 
