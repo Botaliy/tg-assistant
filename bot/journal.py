@@ -38,7 +38,8 @@ CREATE TABLE IF NOT EXISTS drafts (
 );
 CREATE TABLE IF NOT EXISTS memes (
     token INTEGER PRIMARY KEY, chat_id INTEGER NOT NULL, meme_id INTEGER NOT NULL,
-    author_id INTEGER, author TEXT NOT NULL, ts REAL NOT NULL
+    author_id INTEGER, author TEXT NOT NULL, ts REAL NOT NULL,
+    rich INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS memes_chat_ts ON memes (chat_id, ts);
 CREATE TABLE IF NOT EXISTS meme_votes (
@@ -104,6 +105,12 @@ class Journal:
     def __init__(self, path: Path | str):
         self.db = sqlite3.connect(str(path), isolation_level=None)  # autocommit
         self.db.executescript(SCHEMA)
+        # Columns added after a table was first made.
+        for table, column in (("memes", "rich INTEGER NOT NULL DEFAULT 0"),):
+            try:
+                self.db.execute(f"ALTER TABLE {table} ADD COLUMN {column}")
+            except sqlite3.OperationalError:
+                pass  # already there
 
     # Daily AI reply counters: what the limits are checked against.
 
@@ -203,8 +210,20 @@ class Journal:
             (token, chat_id, meme_id, author_id, author, time.time() if ts is None else ts),
         )
 
-    def has_meme(self, token: int) -> bool:
-        return self.db.execute("SELECT 1 FROM memes WHERE token = ?", (token,)).fetchone() is not None
+    def set_meme_rich(self, token: int, rich: bool) -> None:
+        """Whether the rating went out as a rich message (or as plain text)."""
+        self.db.execute("UPDATE memes SET rich = ? WHERE token = ?", (int(rich), token))
+
+    def meme_is_rich(self, token: int) -> bool | None:
+        """None: no such meme."""
+        row = self.db.execute("SELECT rich FROM memes WHERE token = ?", (token,)).fetchone()
+        return None if row is None else bool(row[0])
+
+    def meme_scores(self, token: int) -> dict[int, int]:
+        """Score -> how many people gave it."""
+        return dict(self.db.execute(
+            "SELECT score, COUNT(*) FROM meme_votes WHERE token = ? AND score IS NOT NULL GROUP BY score", (token,),
+        ).fetchall())
 
     def vote_meme(self, token: int, user_id: int, score: int) -> None:
         self.db.execute(

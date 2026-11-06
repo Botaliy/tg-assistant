@@ -9,6 +9,12 @@ bot's inline mode ("via @bot"): the panel bot doesn't have to be in the
 chat, the clicks still reach it. Its inline answers are for me only; its
 meme buttons are the one thing it takes from anyone.
 
+The rating is a rich message (Telegram's HTML blocks): the average in
+bold and how people voted in a collapsible table. If Telegram won't take a
+rich message from me, the same goes out as plain text; the journal keeps
+which one each meme got, so clicks edit it the right way. The buttons are
+colored: 1–3 red, 8–10 green, the joke blue.
+
 An album is one meme. Votes live in the journal, one score per person (a
 new click changes it), so restarts lose nothing.
 """
@@ -19,7 +25,7 @@ import logging
 import random
 from collections.abc import Awaitable, Callable
 
-from telethon import Button, TelegramClient, events, utils
+from telethon import Button, TelegramClient, events, functions, types, utils
 from telethon.errors import MessageNotModifiedError, RPCError
 
 from bot.journal import Journal
@@ -32,7 +38,9 @@ SCORES = range(1, 11)
 CHECK_EVERY_SECONDS = 60
 TOP_DAYS = 7
 SUNDAY = 6
-QUERY = "meme "  # the inline query: "meme <token>"
+QUERY = "meme "  # the inline query: "meme <token>", or "meme <token> plain"
+PLAIN = " plain"
+BAR_WIDTH = 8
 DATA = "mr:"  # button data: "mr:<token>:<score or j>"
 NO_INLINE = (
     "🗳 Не получается прислать оценку мема: включи inline-режим у пульта — "
@@ -65,13 +73,49 @@ def header(avg: float | None, voters: int) -> str:
     return f"{QUESTION} · ⭐ {avg:.1f} ({votes(voters)})"
 
 
+def card(scores: dict[int, int]) -> str:
+    """The rich message: the average in bold, and how people voted in a
+    collapsible table with bars."""
+    voters = sum(scores.values())
+    if not voters:
+        return f"<p><b>{QUESTION}</b> 👇</p>"
+    avg = sum(score * n for score, n in scores.items()) / voters
+    most = max(scores.values())
+    rows = "".join(
+        f'<tr><td align="right"><b>{score}</b></td>'
+        f'<td>{"▰" * max(1, round(BAR_WIDTH * scores[score] / most))}</td>'
+        f'<td align="right">{scores[score]}</td></tr>'
+        for score in sorted(scores, reverse=True)
+    )
+    return (
+        f"<p><b>{QUESTION}</b> · ⭐ <b>{avg:.1f}</b> из 10 · {votes(voters)}</p>"
+        f"<details><summary>Как голосовали</summary><table compact>{rows}</table></details>"
+    )
+
+
+def button(text: str, data: str, **style) -> types.KeyboardInlineButton:
+    b = Button.inline(text, data.encode())
+    if style:
+        b.style = types.KeyboardButtonStyle(**style)
+    return b
+
+
+def score_style(score: int) -> dict:
+    if score <= 3:
+        return {"bg_danger": True}
+    if score >= 8:
+        return {"bg_success": True}
+    return {}
+
+
 def buttons(token: int, joke: str = "", jokes: int = 0) -> list:
     rows = [
-        [Button.inline(str(n), f"{DATA}{token}:{n}".encode()) for n in SCORES[:5]],
-        [Button.inline(str(n), f"{DATA}{token}:{n}".encode()) for n in SCORES[5:]],
+        [button(str(n), f"{DATA}{token}:{n}", **score_style(n)) for n in SCORES[:5]],
+        [button(str(n), f"{DATA}{token}:{n}", **score_style(n)) for n in SCORES[5:]],
     ]
     if joke:
-        rows.append([Button.inline(f"{joke} · {jokes}" if jokes else joke, f"{DATA}{token}:j".encode())])
+        label = f"{joke} · {jokes}" if jokes else joke
+        rows.append([button(label, f"{DATA}{token}:j", bg_primary=True)])
     return rows
 
 
@@ -97,11 +141,27 @@ def format_top(journal: Journal, chat_id: int, now: float) -> str:
     return "\n".join(lines)
 
 
+async def edit_rich(bot: TelegramClient, msg_id, rich_html: str, markup: list) -> None:
+    """Edits an inline message into a rich one, from the datacenter that
+    holds it, as Telethon's own edit_message does for plain text."""
+    request = functions.messages.EditInlineBotMessageRequest(
+        id=msg_id, rich_message=types.InputRichMessageHTML(rich_html), reply_markup=bot.build_reply_markup(markup),
+    )
+    if bot.session.dc_id == msg_id.dc_id:
+        await bot(request)
+        return
+    sender = await bot._borrow_exported_sender(msg_id.dc_id)
+    try:
+        await bot._call(sender, request)
+    finally:
+        await bot._return_exported_sender(sender)
+
+
 class MemeRatings:
     def __init__(
         self, client: TelegramClient, store: Store, journal: Journal, bot_username: str,
         notify: Callable[[str], Awaitable[None]], joke: str = "",
-        top_hour: int = -1, tz: datetime.tzinfo = datetime.UTC,
+        top_hour: int = -1, tz: datetime.tzinfo = datetime.UTC, rich: bool = True,
     ):
         self.client = client
         self.store = store
@@ -109,6 +169,7 @@ class MemeRatings:
         self.bot_username = bot_username
         self.notify = notify
         self.joke = joke
+        self.rich = rich
         self.top_hour = top_hour
         self.tz = tz
         self._last_album: dict[int, int] = {}  # chat id -> grouped_id already rated
@@ -152,18 +213,25 @@ class MemeRatings:
         self.journal.add_meme(
             token, chat_id, message.id, message.sender_id, (utils.get_display_name(sender) if sender else "") or "Кто-то",
         )
-        try:
-            results = await self.client.inline_query(self.bot_username, f"{QUERY}{token}", entity=chat_id)
-            if not results:
-                raise ValueError("the panel bot gave no inline result")
-            sent = await self._sending_to(chat_id, lambda: results[0].click(chat_id, reply_to=message.id))
-        except (RPCError, ValueError) as e:
-            log.warning("Can't send a meme rating in %s: %s", chat_id, e)
+        sent = None
+        for rich in ((True, False) if self.rich else (False,)):
+            self.journal.set_meme_rich(token, rich)  # before a click can come
+            try:
+                query = f"{QUERY}{token}" + ("" if rich else PLAIN)
+                results = await self.client.inline_query(self.bot_username, query, entity=chat_id)
+                if not results:
+                    raise ValueError("the panel bot gave no inline result")
+                sent = await self._sending_to(chat_id, lambda: results[0].click(chat_id, reply_to=message.id))
+                break
+            except (RPCError, ValueError) as e:
+                log.warning("Can't send a %s meme rating in %s: %s", "rich" if rich else "plain", chat_id, e)
+                error = e
+        if sent is None:
             if not self._told_no_inline:
                 self._told_no_inline = True
-                await self.notify(f"{NO_INLINE}\n({e})")
+                await self.notify(f"{NO_INLINE}\n({error})")
             return
-        log.info("Meme rating %s for %s in %s", sent.id, message.id, chat_id)
+        log.info("Meme rating %s (%s) for %s in %s", sent.id, "rich" if rich else "plain", message.id, chat_id)
 
     # The panel bot's side: the inline answer and the clicks.
 
@@ -171,19 +239,36 @@ class MemeRatings:
         @bot.on(events.InlineQuery())
         async def on_inline(event) -> None:
             text = event.text or ""
+            plain = text.endswith(PLAIN)
+            token = text[len(QUERY):len(text) - len(PLAIN) if plain else None]
             # Anyone can type @bot in any chat: only my userbot's rating requests get an answer.
-            if event.sender_id != owner_id or not text.startswith(QUERY) or not text[len(QUERY):].isdigit():
+            if event.sender_id != owner_id or not text.startswith(QUERY) or not token.isdigit():
                 await event.answer([], cache_time=0, private=True)
                 return
-            token = int(text[len(QUERY):])
-            result = event.builder.article(QUESTION, id=str(token), text=header(None, 0), buttons=buttons(token, self.joke))
-            await event.answer([result], cache_time=0, private=True)
+            token = int(token)
+            if plain:
+                await event.answer([event.builder.article(
+                    QUESTION, id=str(token), text=header(None, 0), buttons=buttons(token, self.joke),
+                )], cache_time=0, private=True)
+                return
+            # By hand: Telethon's builder has no rich messages yet.
+            await bot(functions.messages.SetInlineBotResultsRequest(
+                query_id=event.query.query_id, cache_time=0, private=True,
+                results=[types.InputBotInlineResult(
+                    id=str(token), type="article", title=QUESTION,
+                    send_message=types.InputBotInlineMessageRichMessage(
+                        rich_message=types.InputRichMessageHTML(card({})),
+                        reply_markup=bot.build_reply_markup(buttons(token, self.joke)),
+                    ),
+                )],
+            ))
 
         @bot.on(events.CallbackQuery(pattern=DATA.encode()))
         async def on_click(event) -> None:
             _, token, choice = event.data.decode().split(":")
             token = int(token)
-            if not self.journal.has_meme(token):
+            rich = self.journal.meme_is_rich(token)
+            if rich is None:
                 await event.answer("Этот мем уже не оценить")
                 return
             if choice == "j":
@@ -193,10 +278,12 @@ class MemeRatings:
                 self.journal.vote_meme(token, event.sender_id, int(choice))
                 toast = f"Твоя оценка: {choice}"
             avg, voters, jokes = self.journal.meme_tally(token)
+            markup = buttons(token, self.joke, jokes)
             try:
-                await bot.edit_message(
-                    event.query.msg_id, header(avg, voters), buttons=buttons(token, self.joke, jokes),
-                )
+                if rich:
+                    await edit_rich(bot, event.query.msg_id, card(self.journal.meme_scores(token)), markup)
+                else:
+                    await bot.edit_message(event.query.msg_id, header(avg, voters), buttons=markup)
             except MessageNotModifiedError:
                 pass
             except RPCError as e:

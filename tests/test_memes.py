@@ -6,7 +6,7 @@ from telethon import types
 
 from bot import commands
 from bot.journal import Journal
-from bot.memes import MemeRatings, format_top, header, is_meme, link, plural
+from bot.memes import MemeRatings, card, format_top, header, is_meme, link, plural
 from bot.store import Store
 
 OWNER = 1
@@ -27,11 +27,12 @@ def message(chat_id=5, msg_id=1, photo=True, grouped_id=None, sender="Вася",
 class FakeUserbot:
     """The userbot: asks the panel bot inline and sends what it gives."""
 
-    def __init__(self, inline_fails=False):
+    def __init__(self, inline_fails=False, rich_fails=False):
         self.queries = []
         self.clicks = []
         self.sent = []
         self.inline_fails = inline_fails
+        self.rich_fails = rich_fails
 
     async def inline_query(self, bot, query, entity=None):
         if self.inline_fails:
@@ -41,6 +42,8 @@ class FakeUserbot:
 
         class Result:
             async def click(self, chat_id, reply_to=None):
+                if client.rich_fails and not query.endswith(" plain"):
+                    raise ValueError("no rich messages for you")
                 client.clicks.append((chat_id, query, reply_to))
                 return SimpleNamespace(id=100 + len(client.clicks))
 
@@ -57,6 +60,14 @@ class FakeBot:
     def __init__(self):
         self.handlers = []
         self.edits = []
+        self.requests = []
+        self.session = SimpleNamespace(dc_id=2)
+
+    async def __call__(self, request):
+        self.requests.append(request)
+
+    def build_reply_markup(self, buttons):
+        return buttons
 
     def on(self, event):
         def register(handler):
@@ -68,16 +79,16 @@ class FakeBot:
         self.edits.append((msg_id, text, buttons))
 
 
-def make(tmp_path, joke="", inline_fails=False):
+def make(tmp_path, joke="", inline_fails=False, rich_fails=False, rich=True):
     store = Store(tmp_path / "rules.json")
     store.set_memes(5, True, "Мемы")
     journal = Journal(tmp_path / "assistant.db")
-    userbot, bot, notes = FakeUserbot(inline_fails), FakeBot(), []
+    userbot, bot, notes = FakeUserbot(inline_fails, rich_fails), FakeBot(), []
 
     async def notify(text):
         notes.append(text)
 
-    ratings = MemeRatings(userbot, store, journal, "panel_bot", notify, joke)
+    ratings = MemeRatings(userbot, store, journal, "panel_bot", notify, joke, rich=rich)
     ratings.setup_bot(bot, OWNER)
     return ratings, userbot, bot, journal, notes
 
@@ -85,6 +96,7 @@ def make(tmp_path, joke="", inline_fails=False):
 class Inline:
     def __init__(self, text, sender_id=OWNER):
         self.text, self.sender_id = text, sender_id
+        self.query = SimpleNamespace(query_id=77)
         self.answers = None
         self.builder = SimpleNamespace(article=lambda title, **kw: SimpleNamespace(title=title, **kw))
 
@@ -95,7 +107,7 @@ class Inline:
 class Click:
     def __init__(self, data, sender_id):
         self.data, self.sender_id = data.encode(), sender_id
-        self.query = SimpleNamespace(msg_id="inline-msg")
+        self.query = SimpleNamespace(msg_id=SimpleNamespace(dc_id=2))
         self.toast = None
 
     async def answer(self, text=None):
@@ -108,6 +120,13 @@ def token_of(userbot):
 
 def labels(markup):
     return [[b.text for b in row] for row in markup]
+
+
+def colors(markup):
+    def color(b):
+        st = b.style
+        return "r" if st and st.bg_danger else "g" if st and st.bg_success else "b" if st and st.bg_primary else "-"
+    return ["".join(color(b) for b in row) for row in markup]
 
 
 def test_what_counts_as_a_meme():
@@ -126,7 +145,7 @@ def test_every_meme_gets_a_rating_through_the_panel_bot(tmp_path):
     assert [(c, r) for c, _, r in userbot.clicks] == [(5, 7), (5, 8)]
     bot, query, entity = userbot.queries[0]
     assert (bot, entity) == ("panel_bot", 5) and query.startswith("meme ")
-    assert journal.has_meme(token_of(userbot))
+    assert journal.meme_is_rich(token_of(userbot)) is True
     assert ratings.is_own(SimpleNamespace(chat_id=5, id=102))
     assert not ratings.is_own(SimpleNamespace(chat_id=5, id=7))
 
@@ -140,20 +159,30 @@ def test_other_chats_text_and_album_tails_get_nothing(tmp_path):
     assert len(userbot.clicks) == 1
 
 
-def test_inline_answer_is_two_rows_and_only_for_me(tmp_path):
+def test_inline_answer_is_a_rich_card_with_colored_buttons_and_only_for_me(tmp_path):
     ratings, _, bot, _, _ = make(tmp_path, joke="шутка")
     on_inline = bot.handlers[0]
-    mine = Inline("meme 123")
-    asyncio.run(on_inline(mine))
-    [article] = mine.answers
-    assert article.text == "Оцени мем 👇"
-    assert labels(article.buttons) == [["1", "2", "3", "4", "5"], ["6", "7", "8", "9", "10"], ["шутка"]]
-    for stranger in (Inline("meme 123", sender_id=2), Inline("котики")):
+    asyncio.run(on_inline(Inline("meme 123")))
+    [request] = bot.requests
+    assert request.query_id == 77 and request.private
+    [result] = request.results
+    message = result.send_message
+    assert message.rich_message.html == "<p><b>Оцени мем</b> 👇</p>"
+    assert labels(message.reply_markup) == [["1", "2", "3", "4", "5"], ["6", "7", "8", "9", "10"], ["шутка"]]
+    assert colors(message.reply_markup) == ["rrr--", "--ggg", "b"]
+
+    plain = Inline("meme 123 plain")
+    asyncio.run(on_inline(plain))
+    [article] = plain.answers
+    assert article.text == "Оцени мем 👇" and labels(article.buttons)[2] == ["шутка"]
+
+    for stranger in (Inline("meme 123", sender_id=2), Inline("котики"), Inline("meme 12x plain")):
         asyncio.run(on_inline(stranger))
         assert stranger.answers == []
+    assert len(bot.requests) == 1
 
 
-def test_clicks_change_the_average_one_vote_per_person(tmp_path):
+def test_clicks_change_the_card_one_vote_per_person(tmp_path):
     ratings, userbot, bot, journal, _ = make(tmp_path, joke="шутка")
     asyncio.run(ratings.on_message(message()))
     token = token_of(userbot)
@@ -163,18 +192,43 @@ def test_clicks_change_the_average_one_vote_per_person(tmp_path):
         click = Click(data, who)
         asyncio.run(on_click(click))
     assert click.toast == "Твоя оценка: 4"
-    assert bot.edits[-1][:2] == ("inline-msg", "Оцени мем · ⭐ 5.5 (2 голоса)")
+    edit = bot.requests[-1]
+    assert edit.rich_message.html.startswith("<p><b>Оцени мем</b> · ⭐ <b>5.5</b> из 10 · 2 голоса</p>")
 
-    joke = Click(f"mr:{token}:j", 23)
-    asyncio.run(on_click(joke))
-    assert labels(bot.edits[-1][2])[2] == ["шутка · 1"]
-    assert bot.edits[-1][1] == "Оцени мем · ⭐ 5.5 (2 голоса)"  # the joke isn't a score
     asyncio.run(on_click(Click(f"mr:{token}:j", 23)))
-    assert labels(bot.edits[-1][2])[2] == ["шутка"]
+    assert labels(bot.requests[-1].reply_markup)[2] == ["шутка · 1"]
+    assert "5.5" in bot.requests[-1].rich_message.html  # the joke isn't a score
+    asyncio.run(on_click(Click(f"mr:{token}:j", 23)))
+    assert labels(bot.requests[-1].reply_markup)[2] == ["шутка"]
+    assert bot.edits == []  # all rich
 
     gone = Click("mr:999:5", 21)
     asyncio.run(on_click(gone))
     assert gone.toast == "Этот мем уже не оценить"
+
+
+def test_falls_back_to_plain_text_and_edits_it_as_such(tmp_path):
+    ratings, userbot, bot, journal, notes = make(tmp_path, rich_fails=True)
+    asyncio.run(ratings.on_message(message(msg_id=7)))
+    [(_, query, reply_to)] = userbot.clicks
+    assert query.endswith(" plain") and reply_to == 7 and notes == []
+    token = token_of(userbot)
+    asyncio.run(bot.handlers[1](Click(f"mr:{token}:9", 21)))
+    assert bot.edits[-1][1] == "Оцени мем · ⭐ 9.0 (1 голос)" and bot.requests == []
+
+
+def test_rich_can_be_turned_off(tmp_path):
+    ratings, userbot, _, _, _ = make(tmp_path, rich=False)
+    asyncio.run(ratings.on_message(message()))
+    assert [q for _, q, _ in userbot.queries] == [f"meme {token_of(userbot)} plain"]
+
+
+def test_card():
+    assert card({}) == "<p><b>Оцени мем</b> 👇</p>"
+    html = card({10: 2, 9: 1, 3: 1})
+    assert html.startswith("<p><b>Оцени мем</b> · ⭐ <b>8.0</b> из 10 · 4 голоса</p><details><summary>")
+    assert html.index("<b>10</b>") < html.index("<b>9</b>") < html.index("<b>3</b>")
+    assert "<td>▰▰▰▰▰▰▰▰</td>" in html and "<td>▰▰▰▰</td>" in html
 
 
 def test_inline_mode_off_tells_the_panel_once(tmp_path):

@@ -55,6 +55,10 @@ class Settings(BaseSettings):
     # A joke button under every meme, next to 1–10 (".memes"): its text,
     # with how many pressed it. Empty = no such button.
     meme_joke_button: str = ""
+    # The rating as a rich message (bold average, a collapsible table of
+    # votes); false = plain text. Falls back to plain text by itself when
+    # Telegram won't take a rich one.
+    meme_rich: bool = True
     # Every Sunday from this hour the week's top goes to each meme chat by
     # itself (only where memes got scores); -1 = never.
     meme_top_hour: int = 14

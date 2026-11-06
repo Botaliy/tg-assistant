@@ -383,7 +383,7 @@ async def run() -> None:
         ai.resume_reports()
     memes = MemeRatings(
         client, store, journal, bot_me.username, notify, settings.meme_joke_button.strip(),
-        settings.meme_top_hour, ZoneInfo(settings.timezone),
+        settings.meme_top_hour, ZoneInfo(settings.timezone), settings.meme_rich,
     )
     memes.setup_bot(bot, me.id)
     if store.memes and not bot_me.bot_inline_placeholder:
