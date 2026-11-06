@@ -11,10 +11,11 @@ from telethon import TelegramClient, events, functions, types, utils
 from telethon.errors import RPCError
 
 from bot import commands, monitor, panel
+from bot import memes as memes_module
 from bot.commands import Answer, error
 from bot.config import Settings, get_settings
 from bot.journal import Journal, format_usage
-from bot.memes import MemePolls
+from bot.memes import MemeRatings
 from bot.rules import Cooldown
 from bot.store import Store
 
@@ -40,7 +41,7 @@ class Assistant:
         self.journal = journal
         self.ai_available = ai_available
         self.ai: AiResponder | None = None  # set once the AI is up
-        self.memes: MemePolls | None = None
+        self.memes: MemeRatings | None = None
         self.send_backup: Callable[[], Awaitable[None]] | None = None  # set once the panel is up
         self._tasks: set[asyncio.Task] = set()
 
@@ -230,7 +231,7 @@ def setup_userbot(
     client: TelegramClient, assistant: Assistant, store: Store,
     cooldown: Cooldown, notify: Callable[[str], Awaitable[None]], panel_id: int,
     ai: "AiResponder | None", insults: "InsultFilter | None" = None,
-    memes: MemePolls | None = None,
+    memes: MemeRatings | None = None,
 ) -> None:
     @client.on(events.NewMessage(outgoing=True))
     async def on_command(event) -> None:
@@ -239,7 +240,7 @@ def setup_userbot(
         if ai is not None and ai.is_own(event):
             return  # the AI's reply is never a command, whatever it says
         if memes is not None and memes.is_own(event):
-            return  # a meme poll or its score, not me writing
+            return  # a meme rating or the top, not me writing
         # A forwarded message is someone else's text, even if it starts with a dot.
         cmd = None if event.fwd_from else commands.parse(event.raw_text)
         if cmd is None:
@@ -380,9 +381,13 @@ async def run() -> None:
             takeover_seconds=settings.ai_takeover_minutes * 60,
         )
         ai.resume_reports()
-    memes = MemePolls(
-        client, store, journal, settings.meme_poll_hours, settings.meme_top_hour, ZoneInfo(settings.timezone),
+    memes = MemeRatings(
+        client, store, journal, bot_me.username, notify, settings.meme_joke_button.strip(),
+        settings.meme_top_hour, ZoneInfo(settings.timezone),
     )
+    memes.setup_bot(bot, me.id)
+    if store.memes and not bot_me.bot_inline_placeholder:
+        await notify(memes_module.NO_INLINE)
     setup_userbot(
         client, assistant, store, Cooldown(settings.reply_cooldown_seconds), notify, bot_me.id, ai, insults,
         memes,

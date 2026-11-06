@@ -52,9 +52,9 @@ class Settings(BaseSettings):
     # Checks per chat per day, so a flood can't run up the bill; past it the
     # messages stay unchecked until tomorrow.
     ai_filter_daily_per_chat: int = 300
-    # A meme poll (".memes") closes after this long, the average goes to the
-    # chat and counts for ".top".
-    meme_poll_hours: float = 1
+    # A joke button under every meme, next to 1–10 (".memes"): its text,
+    # with how many pressed it. Empty = no such button.
+    meme_joke_button: str = ""
     # Every Sunday from this hour the week's top goes to each meme chat by
     # itself (only where memes got scores); -1 = never.
     meme_top_hour: int = 14

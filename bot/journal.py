@@ -1,6 +1,6 @@
 """What happens over time, in SQLite (data/assistant.db): daily AI reply
 counters, reports waiting to be sent, past reports, drafts waiting for my
-decision, tokens spent and meme polls with their scores.
+decision, tokens spent and memes with their votes.
 
 Settings stay in rules.json (bot.store); this is the part that grows or used
 to be lost on a restart. Calls are synchronous: each is a tiny local query.
@@ -36,12 +36,14 @@ CREATE TABLE IF NOT EXISTS drafts (
     id INTEGER PRIMARY KEY, ts REAL NOT NULL, chat_id INTEGER NOT NULL, label TEXT NOT NULL,
     text TEXT NOT NULL, reply_to INTEGER, context INTEGER NOT NULL
 );
-CREATE TABLE IF NOT EXISTS meme_polls (
-    chat_id INTEGER NOT NULL, msg_id INTEGER NOT NULL, poll_id INTEGER NOT NULL,
-    meme_id INTEGER NOT NULL, author_id INTEGER, author TEXT NOT NULL,
-    ts REAL NOT NULL, close_at REAL NOT NULL,
-    closed INTEGER NOT NULL DEFAULT 0, score REAL, voters INTEGER,
-    PRIMARY KEY (chat_id, msg_id)
+CREATE TABLE IF NOT EXISTS memes (
+    token INTEGER PRIMARY KEY, chat_id INTEGER NOT NULL, meme_id INTEGER NOT NULL,
+    author_id INTEGER, author TEXT NOT NULL, ts REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS memes_chat_ts ON memes (chat_id, ts);
+CREATE TABLE IF NOT EXISTS meme_votes (
+    token INTEGER NOT NULL, user_id INTEGER NOT NULL, score INTEGER, joke INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (token, user_id)
 );
 """
 
@@ -189,46 +191,65 @@ class Journal:
             "SELECT ts, chat_id, label, reason, text FROM reports ORDER BY id DESC LIMIT ?", (limit,),
         ).fetchall()
 
-    # Meme polls: open until close_at, then with the average score.
+    # Memes and their votes: a score from 1 to 10 and the joke button, one
+    # of each per person; a new click changes the score.
 
-    def add_meme_poll(
-        self, chat_id: int, msg_id: int, poll_id: int, meme_id: int,
-        author_id: int | None, author: str, close_at: float, ts: float | None = None,
+    def add_meme(
+        self, token: int, chat_id: int, meme_id: int, author_id: int | None, author: str,
+        ts: float | None = None,
     ) -> None:
         self.db.execute(
-            "INSERT OR REPLACE INTO meme_polls (chat_id, msg_id, poll_id, meme_id, author_id, author, ts, close_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (chat_id, msg_id, poll_id, meme_id, author_id, author, time.time() if ts is None else ts, close_at),
+            "INSERT OR REPLACE INTO memes (token, chat_id, meme_id, author_id, author, ts) VALUES (?, ?, ?, ?, ?, ?)",
+            (token, chat_id, meme_id, author_id, author, time.time() if ts is None else ts),
         )
 
-    def meme_polls_due(self, now: float) -> list[tuple[int, int, int]]:
-        """Open polls past their time: chat id, poll message id, poll id."""
-        return self.db.execute(
-            "SELECT chat_id, msg_id, poll_id FROM meme_polls WHERE closed = 0 AND close_at <= ?", (now,),
-        ).fetchall()
+    def has_meme(self, token: int) -> bool:
+        return self.db.execute("SELECT 1 FROM memes WHERE token = ?", (token,)).fetchone() is not None
 
-    def close_meme_poll(self, chat_id: int, msg_id: int, score: float | None, voters: int) -> None:
-        """score None: nobody voted, or the poll couldn't be read."""
+    def vote_meme(self, token: int, user_id: int, score: int) -> None:
         self.db.execute(
-            "UPDATE meme_polls SET closed = 1, score = ?, voters = ? WHERE chat_id = ? AND msg_id = ?",
-            (score, voters, chat_id, msg_id),
+            "INSERT INTO meme_votes (token, user_id, score) VALUES (?, ?, ?) "
+            "ON CONFLICT (token, user_id) DO UPDATE SET score = excluded.score",
+            (token, user_id, score),
         )
+
+    def toggle_meme_joke(self, token: int, user_id: int) -> bool:
+        """Returns whether the joke is now pressed by this person."""
+        self.db.execute(
+            "INSERT INTO meme_votes (token, user_id, joke) VALUES (?, ?, 1) "
+            "ON CONFLICT (token, user_id) DO UPDATE SET joke = 1 - joke",
+            (token, user_id),
+        )
+        row = self.db.execute(
+            "SELECT joke FROM meme_votes WHERE token = ? AND user_id = ?", (token, user_id),
+        ).fetchone()
+        return bool(row[0])
+
+    def meme_tally(self, token: int) -> tuple[float | None, int, int]:
+        """The average score (None: no scores yet), how many scored, how many pressed the joke."""
+        avg, voters, jokes = self.db.execute(
+            "SELECT AVG(score), COUNT(score), COALESCE(SUM(joke), 0) FROM meme_votes WHERE token = ?", (token,),
+        ).fetchone()
+        return avg, voters, jokes
 
     def best_memes(self, chat_id: int, since: float, limit: int = 3) -> list[tuple[int, str, float, int]]:
-        """Scored memes since a time, the best first: meme id, author, score, voters."""
+        """Scored memes since a time, the best first: meme id, author, average, voters."""
         return self.db.execute(
-            "SELECT meme_id, author, score, voters FROM meme_polls "
-            "WHERE chat_id = ? AND ts >= ? AND score IS NOT NULL "
-            "ORDER BY score DESC, voters DESC, ts LIMIT ?",
+            "SELECT m.meme_id, m.author, AVG(v.score), COUNT(v.score) FROM memes m "
+            "JOIN meme_votes v ON v.token = m.token AND v.score IS NOT NULL "
+            "WHERE m.chat_id = ? AND m.ts >= ? GROUP BY m.token "
+            "ORDER BY AVG(v.score) DESC, COUNT(v.score) DESC, m.ts LIMIT ?",
             (chat_id, since, limit),
         ).fetchall()
 
     def best_meme_authors(self, chat_id: int, since: float, limit: int = 3) -> list[tuple[str, float, int]]:
-        """Authors by the average of their memes' scores: author, average, memes."""
+        """Authors by the average of their memes' averages: author, average, scored memes."""
         return self.db.execute(
-            "SELECT MAX(author), AVG(score), COUNT(*) FROM meme_polls "
-            "WHERE chat_id = ? AND ts >= ? AND score IS NOT NULL "
-            "GROUP BY COALESCE(author_id, author) ORDER BY AVG(score) DESC, COUNT(*) DESC LIMIT ?",
+            "SELECT MAX(author), AVG(score), COUNT(*) FROM ("
+            "  SELECT m.author_id, m.author, AVG(v.score) AS score FROM memes m "
+            "  JOIN meme_votes v ON v.token = m.token AND v.score IS NOT NULL "
+            "  WHERE m.chat_id = ? AND m.ts >= ? GROUP BY m.token"
+            ") GROUP BY COALESCE(author_id, author) ORDER BY AVG(score) DESC, COUNT(*) DESC LIMIT ?",
             (chat_id, since, limit),
         ).fetchall()
 

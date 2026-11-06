@@ -51,6 +51,7 @@ def menu_buttons(webapp_url: str = ""):
 
 
 BACK = [Button.inline("⬅️ Меню", b"menu")]
+MEME_BUTTONS = b"mr:"  # bot.memes.DATA
 CANCEL = [Button.inline("✖️ Отмена", b"menu")]
 
 
@@ -250,6 +251,8 @@ def setup(bot: TelegramClient, assistant, store: Store, owner_id: int, webapp_ur
     @bot.on(events.CallbackQuery())
     async def on_button(event) -> None:
         nonlocal wizard
+        if event.data.startswith(MEME_BUTTONS):
+            return  # meme ratings: anyone's clicks, handled in bot.memes
         if event.sender_id != owner_id:
             await event.answer("Это не твой пульт", alert=True)
             return
@@ -342,7 +345,7 @@ def setup(bot: TelegramClient, assistant, store: Store, owner_id: int, webapp_ur
             chat_id = int(chat)
             label = labels.get(chat_id) or await assistant.label_for(chat_id)
             store.set_memes(chat_id, mode == "on", label)
-            await event.answer("Под мемами будет опрос 1–10" if mode == "on" else "Больше не оцениваем мемы")
+            await event.answer("Под мемами будут кнопки 1–10" if mode == "on" else "Больше не оцениваем мемы")
             await edit(event, person_screen(store, chat_id, label, assistant.deepseek_available))
         elif name == "aimode":
             chat, _, mode = arg.partition(":")
