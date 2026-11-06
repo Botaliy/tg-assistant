@@ -15,6 +15,11 @@ rich message from me, the same goes out as plain text; the journal keeps
 which one each meme got, so clicks edit it the right way. The buttons are
 colored: 1–3 red, 8–10 green, the joke blue.
 
+The card has a few jokes of its own: a verdict that follows the average
+(with special ones when everybody agrees, or nobody does), "🔁 Баян!" for a
+photo or a file the chat has seen before, and 😏 next to the author who
+rated their own meme. The weekly top hands out nominations too.
+
 An album is one meme. Votes live in the journal, one score per person (a
 new click changes it), so restarts lose nothing.
 """
@@ -24,7 +29,9 @@ import datetime
 import html
 import logging
 import random
+import time
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field
 
 from telethon import Button, TelegramClient, events, functions, types, utils
 from telethon.errors import MessageNotModifiedError, RPCError
@@ -67,6 +74,8 @@ def votes(n: int) -> str:
     return f"{n} {plural(n, 'голос', 'голоса', 'голосов')}"
 
 
+# When everybody (at least this many) agrees, or nobody does, the verdict says so.
+CONSENSUS_VOTERS = 3
 # The verdict the card shows: below this average -> these words.
 VERDICTS = ((3, "💀 Кринж"), (5, "😐 Так себе"), (7, "🙂 Норм"), (9, "😂 Годнота"), (11, "🔥 Шедевр"))
 # What the joke button says back, at random.
@@ -74,7 +83,32 @@ JOKE_TOASTS = ("😏 Засчитано", "📝 Записал в протоко
 JOKE_UNDO_TOASTS = ("🙊 Беру слова назад", "🤐 Ладно, замяли")
 
 
-def verdict(avg: float) -> str:
+@dataclass
+class MemeView:
+    """What a rating card shows."""
+
+    scores: dict[int, list[str]] = field(default_factory=dict)  # score -> names, in voting order
+    jokes: int = 0
+    repeat: str = ""  # the "🔁 Баян!" line, or nothing
+
+    @property
+    def voters(self) -> int:
+        return sum(len(names) for names in self.scores.values())
+
+    @property
+    def average(self) -> float | None:
+        voters = self.voters
+        return sum(score * len(names) for score, names in self.scores.items()) / voters if voters else None
+
+
+def verdict(avg: float, scores: dict[int, list[str]] | None = None) -> str:
+    if scores and sum(len(names) for names in scores.values()) >= CONSENSUS_VOTERS:
+        if set(scores) == {10}:
+            return "🤯 Единогласный шедевр"
+        if set(scores) == {1}:
+            return "⚰️ Похороны мема"
+        if min(scores) == 1 and max(scores) == 10:
+            return "⚔️ Мем раскола"
     return next(words for limit, words in VERDICTS if avg < limit)
 
 
@@ -83,11 +117,24 @@ def bar(avg: float) -> str:
     return "▰" * filled + "▱" * (10 - filled)
 
 
-def header(avg: float | None, voters: int) -> str:
+def ago(seconds: float) -> str:
+    days = int(seconds // 86400)
+    if days == 0:
+        return "сегодня"
+    if days == 1:
+        return "вчера"
+    return f"{days} {plural(days, 'день', 'дня', 'дней')} назад"
+
+
+def repeat_line(seconds_ago: float, avg: float | None) -> str:
+    return f"🔁 Баян! Уже было {ago(seconds_ago)}" + (f", набрал {avg:.1f}" if avg is not None else "")
+
+
+def header(view: MemeView) -> str:
     """The plain-text version of the card."""
-    if avg is None:
-        return f"{QUESTION} 👇"
-    return f"{verdict(avg)} · ⭐ {avg:.1f} ({votes(voters)})"
+    avg = view.average
+    line = f"{QUESTION} 👇" if avg is None else f"{verdict(avg, view.scores)} · ⭐ {avg:.1f} ({votes(view.voters)})"
+    return f"{line}\n{view.repeat}" if view.repeat else line
 
 
 def joke_label(joke: str, jokes: int) -> str:
@@ -97,20 +144,20 @@ def joke_label(joke: str, jokes: int) -> str:
     return f"{joke} · {jokes}" + (" 🚨" if jokes >= 5 else " 🔥" if jokes >= 3 else "")
 
 
-def card(scores: dict[int, list[str]]) -> str:
+def card(view: MemeView) -> str:
     """The rich message: the verdict and the average, a bar, and who gave
     what in a collapsible table."""
-    voters = sum(len(names) for names in scores.values())
-    if not voters:
-        return f"<p><b>{QUESTION}</b> 👇</p>"
-    avg = sum(score * len(names) for score, names in scores.items()) / voters
+    repeat = f"<p>{view.repeat}</p>" if view.repeat else ""
+    avg = view.average
+    if avg is None:
+        return f"<p><b>{QUESTION}</b> 👇</p>{repeat}"
     rows = "".join(
-        f'<tr><td align="right"><b>{score}</b></td><td>{html.escape(", ".join(scores[score]))}</td></tr>'
-        for score in sorted(scores, reverse=True)
+        f'<tr><td align="right"><b>{score}</b></td><td>{html.escape(", ".join(view.scores[score]))}</td></tr>'
+        for score in sorted(view.scores, reverse=True)
     )
     return (
-        f"<p><b>{verdict(avg)}</b> · ⭐ <b>{avg:.1f}</b></p>"
-        f"<p>{bar(avg)} · {votes(voters)}</p>"
+        f"<p><b>{verdict(avg, view.scores)}</b> · ⭐ <b>{avg:.1f}</b></p>"
+        f"<p>{bar(avg)} · {votes(view.voters)}</p>{repeat}"
         f"<details><summary>Кто сколько</summary><table compact>{rows}</table></details>"
     )
 
@@ -146,7 +193,7 @@ def link(chat_id: int, msg_id: int) -> str:
     return f"https://t.me/c/{peer[4:]}/{msg_id}" if peer.startswith("-100") else ""
 
 
-def format_top(journal: Journal, chat_id: int, now: float) -> str:
+def format_top(journal: Journal, chat_id: int, now: float, joke: str = "") -> str:
     since = now - TOP_DAYS * 86400
     memes = journal.best_memes(chat_id, since)
     if not memes:
@@ -159,7 +206,24 @@ def format_top(journal: Journal, chat_id: int, now: float) -> str:
     lines.append("👑 Лучшие авторы")
     for place, (author, score, count) in enumerate(journal.best_meme_authors(chat_id, since), 1):
         lines.append(f"{place}. {author} — {score:.1f} в среднем, {count} {plural(count, 'мем', 'мема', 'мемов')}")
+    awards = nominations(journal, chat_id, since, joke)
+    if awards:
+        lines += ["", "🎖 Номинации", *awards]
     return "\n".join(lines)
+
+
+def nominations(journal: Journal, chat_id: int, since: float, joke: str = "") -> list[str]:
+    awards = []
+    voters = journal.meme_voters(chat_id, since)
+    if len(voters) >= 2 and voters[0][1] < voters[-1][1]:
+        (stingy, low, _), (generous, high, _) = voters[0], voters[-1]
+        awards.append(f"🥶 Душнила недели: {stingy or 'кто-то'} — ставит в среднем {low:.1f}")
+        awards.append(f"🤡 Щедрая душа: {generous or 'кто-то'} — ставит в среднем {high:.1f}")
+    if joke and (magnet := journal.joke_magnet(chat_id, since)):
+        awards.append(f"🫵 «{joke}» чаще всех под мемами: {magnet[0]} ×{magnet[1]}")
+    if reposter := journal.top_reposter(chat_id, since):
+        awards.append(f"🔁 Баянист недели: {reposter[0]} ×{reposter[1]}")
+    return awards
 
 
 async def edit_rich(bot: TelegramClient, msg_id, rich_html: str, markup: list) -> None:
@@ -216,6 +280,22 @@ class MemeRatings:
     async def send(self, chat_id: int, **kwargs):
         return await self._sending_to(chat_id, lambda: self.client.send_message(chat_id, **kwargs))
 
+    def view(self, token: int, now: float | None = None) -> MemeView:
+        meme = self.journal.get_meme(token)
+        if meme is None:
+            return MemeView()
+        author_id, _, repeat_of = meme
+        scores = {
+            score: [f"{name} 😏" if user_id == author_id else name for user_id, name in voters]
+            for score, voters in self.journal.meme_scores(token).items()
+        }
+        repeat = ""
+        original = self.journal.get_meme(repeat_of) if repeat_of else None
+        if original is not None:
+            avg, _, _ = self.journal.meme_tally(repeat_of)
+            repeat = repeat_line((time.time() if now is None else now) - original[1], avg)
+        return MemeView(scores, self.journal.meme_tally(token)[2], repeat)
+
     # The userbot's side: a meme in a chat -> the rating message under it.
 
     async def on_message(self, message) -> None:
@@ -231,8 +311,10 @@ class MemeRatings:
         except (RPCError, ValueError):
             sender = None
         token = random.getrandbits(62)
+        media_id = getattr(message.photo or message.document, "id", None)
         self.journal.add_meme(
             token, chat_id, message.id, message.sender_id, (utils.get_display_name(sender) if sender else "") or "Кто-то",
+            media_id=media_id, repeat_of=self.journal.first_meme_with(chat_id, media_id) if media_id else None,
         )
         sent = None
         for rich in ((True, False) if self.rich else (False,)):
@@ -269,7 +351,7 @@ class MemeRatings:
             token = int(token)
             if plain:
                 await event.answer([event.builder.article(
-                    QUESTION, id=str(token), text=header(None, 0), buttons=buttons(token, self.joke),
+                    QUESTION, id=str(token), text=header(self.view(token)), buttons=buttons(token, self.joke),
                 )], cache_time=0, private=True)
                 return
             # By hand: Telethon's builder has no rich messages yet.
@@ -278,7 +360,7 @@ class MemeRatings:
                 results=[types.InputBotInlineResult(
                     id=str(token), type="article", title=QUESTION,
                     send_message=types.InputBotInlineMessageRichMessage(
-                        rich_message=types.InputRichMessageHTML(card({})),
+                        rich_message=types.InputRichMessageHTML(card(self.view(token))),
                         reply_markup=bot.build_reply_markup(buttons(token, self.joke)),
                     ),
                 )],
@@ -303,13 +385,13 @@ class MemeRatings:
                 name = getattr(voter, "first_name", None) or (utils.get_display_name(voter) if voter else "")
                 self.journal.vote_meme(token, event.sender_id, int(choice), name)
                 toast = f"Твоя оценка: {choice}"
-            avg, voters, jokes = self.journal.meme_tally(token)
-            markup = buttons(token, self.joke, jokes)
+            view = self.view(token)
+            markup = buttons(token, self.joke, view.jokes)
             try:
                 if rich:
-                    await edit_rich(bot, event.query.msg_id, card(self.journal.meme_scores(token)), markup)
+                    await edit_rich(bot, event.query.msg_id, card(view), markup)
                 else:
-                    await bot.edit_message(event.query.msg_id, header(avg, voters), buttons=markup)
+                    await bot.edit_message(event.query.msg_id, header(view), buttons=markup)
             except MessageNotModifiedError:
                 pass
             except RPCError as e:
@@ -319,7 +401,7 @@ class MemeRatings:
     # The top.
 
     def top(self, chat_id: int) -> str:
-        return format_top(self.journal, chat_id, datetime.datetime.now(self.tz).timestamp())
+        return format_top(self.journal, chat_id, datetime.datetime.now(self.tz).timestamp(), self.joke)
 
     async def weekly_top(self, now: datetime.datetime | None = None) -> None:
         """On Sunday from top_hour: the week's top to every meme chat, once a
@@ -335,7 +417,9 @@ class MemeRatings:
             if not self.journal.best_memes(chat_id, now.timestamp() - TOP_DAYS * 86400, limit=1):
                 continue  # a quiet week: no "nothing to show" message
             try:
-                await self.send(chat_id, message=format_top(self.journal, chat_id, now.timestamp()), link_preview=False)
+                await self.send(
+                    chat_id, message=format_top(self.journal, chat_id, now.timestamp(), self.joke), link_preview=False,
+                )
             except (RPCError, ValueError) as e:
                 log.warning("Can't post the weekly meme top in %s: %s", chat_id, e)
 

@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS drafts (
 CREATE TABLE IF NOT EXISTS memes (
     token INTEGER PRIMARY KEY, chat_id INTEGER NOT NULL, meme_id INTEGER NOT NULL,
     author_id INTEGER, author TEXT NOT NULL, ts REAL NOT NULL,
-    rich INTEGER NOT NULL DEFAULT 0
+    rich INTEGER NOT NULL DEFAULT 0, media_id INTEGER, repeat_of INTEGER
 );
 CREATE INDEX IF NOT EXISTS memes_chat_ts ON memes (chat_id, ts);
 CREATE TABLE IF NOT EXISTS meme_votes (
@@ -109,6 +109,8 @@ class Journal:
         # Columns added after a table was first made.
         for table, column in (
             ("memes", "rich INTEGER NOT NULL DEFAULT 0"),
+            ("memes", "media_id INTEGER"),
+            ("memes", "repeat_of INTEGER"),
             ("meme_votes", "name TEXT NOT NULL DEFAULT ''"),
         ):
             try:
@@ -207,12 +209,26 @@ class Journal:
 
     def add_meme(
         self, token: int, chat_id: int, meme_id: int, author_id: int | None, author: str,
-        ts: float | None = None,
+        ts: float | None = None, media_id: int | None = None, repeat_of: int | None = None,
     ) -> None:
+        """media_id: the photo's or the file's id, to spot the same meme again;
+        repeat_of: the token of the meme this one repeats."""
         self.db.execute(
-            "INSERT OR REPLACE INTO memes (token, chat_id, meme_id, author_id, author, ts) VALUES (?, ?, ?, ?, ?, ?)",
-            (token, chat_id, meme_id, author_id, author, time.time() if ts is None else ts),
+            "INSERT OR REPLACE INTO memes (token, chat_id, meme_id, author_id, author, ts, media_id, repeat_of) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (token, chat_id, meme_id, author_id, author, time.time() if ts is None else ts, media_id, repeat_of),
         )
+
+    def first_meme_with(self, chat_id: int, media_id: int) -> int | None:
+        """The token of the first meme in a chat with this photo or file."""
+        row = self.db.execute(
+            "SELECT token FROM memes WHERE chat_id = ? AND media_id = ? ORDER BY ts LIMIT 1", (chat_id, media_id),
+        ).fetchone()
+        return row[0] if row else None
+
+    def get_meme(self, token: int) -> tuple[int | None, float, int | None] | None:
+        """Author id, when, the token it repeats; None: no such meme."""
+        return self.db.execute("SELECT author_id, ts, repeat_of FROM memes WHERE token = ?", (token,)).fetchone()
 
     def set_meme_rich(self, token: int, rich: bool) -> None:
         """Whether the rating went out as a rich message (or as plain text)."""
@@ -223,13 +239,14 @@ class Journal:
         row = self.db.execute("SELECT rich FROM memes WHERE token = ?", (token,)).fetchone()
         return None if row is None else bool(row[0])
 
-    def meme_scores(self, token: int) -> dict[int, list[str]]:
-        """Score -> who gave it, in the order they voted."""
-        scores: dict[int, list[str]] = {}
-        for score, name in self.db.execute(
-            "SELECT score, name FROM meme_votes WHERE token = ? AND score IS NOT NULL ORDER BY rowid", (token,),
+    def meme_scores(self, token: int) -> dict[int, list[tuple[int, str]]]:
+        """Score -> who gave it (user id, name), in the order they voted."""
+        scores: dict[int, list[tuple[int, str]]] = {}
+        for score, user_id, name in self.db.execute(
+            "SELECT score, user_id, name FROM meme_votes WHERE token = ? AND score IS NOT NULL ORDER BY rowid",
+            (token,),
         ):
-            scores.setdefault(score, []).append(name or "кто-то")
+            scores.setdefault(score, []).append((user_id, name or "кто-то"))
         return scores
 
     def vote_meme(self, token: int, user_id: int, score: int, name: str = "") -> None:
@@ -278,6 +295,34 @@ class Journal:
             ") GROUP BY COALESCE(author_id, author) ORDER BY AVG(score) DESC, COUNT(*) DESC LIMIT ?",
             (chat_id, since, limit),
         ).fetchall()
+
+    # Nominations for the weekly top.
+
+    def meme_voters(self, chat_id: int, since: float, min_votes: int = 3) -> list[tuple[str, float, int]]:
+        """Who scored at least min_votes memes: name, the average they give, how many."""
+        return self.db.execute(
+            "SELECT MAX(v.name), AVG(v.score), COUNT(*) FROM meme_votes v JOIN memes m ON m.token = v.token "
+            "WHERE m.chat_id = ? AND m.ts >= ? AND v.score IS NOT NULL "
+            "GROUP BY v.user_id HAVING COUNT(*) >= ? ORDER BY AVG(v.score)",
+            (chat_id, since, min_votes),
+        ).fetchall()
+
+    def joke_magnet(self, chat_id: int, since: float) -> tuple[str, int] | None:
+        """The author whose memes got the joke button the most: author, presses."""
+        return self.db.execute(
+            "SELECT MAX(m.author), SUM(v.joke) FROM memes m JOIN meme_votes v ON v.token = m.token "
+            "WHERE m.chat_id = ? AND m.ts >= ? GROUP BY COALESCE(m.author_id, m.author) "
+            "HAVING SUM(v.joke) > 0 ORDER BY SUM(v.joke) DESC LIMIT 1",
+            (chat_id, since),
+        ).fetchone()
+
+    def top_reposter(self, chat_id: int, since: float) -> tuple[str, int] | None:
+        """Who posted the most memes the chat had already seen: author, how many."""
+        return self.db.execute(
+            "SELECT MAX(author), COUNT(*) FROM memes WHERE chat_id = ? AND ts >= ? AND repeat_of IS NOT NULL "
+            "GROUP BY COALESCE(author_id, author) ORDER BY COUNT(*) DESC LIMIT 1",
+            (chat_id, since),
+        ).fetchone()
 
     # Tokens and money.
 

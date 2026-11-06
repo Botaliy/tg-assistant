@@ -6,14 +6,21 @@ from telethon import types
 
 from bot import commands
 from bot.journal import Journal
-from bot.memes import MemeRatings, bar, card, format_top, header, is_meme, joke_label, link, plural, verdict
+from bot.memes import (
+    MemeRatings, MemeView, ago, bar, card, format_top, header, is_meme, joke_label, link, nominations, plural, verdict,
+)
 from bot.store import Store
 
 OWNER = 1
 
 
-def message(chat_id=5, msg_id=1, photo=True, grouped_id=None, sender="Вася", sender_id=11, **media):
-    fields = {"photo": photo, "gif": False, "video": False, "sticker": False, "video_note": False, "voice": False}
+def message(chat_id=5, msg_id=1, photo=True, grouped_id=None, sender="Вася", sender_id=11, media_id=None, **media):
+    if photo is True:
+        photo = SimpleNamespace(id=media_id or 1000 + msg_id)
+    fields = {
+        "photo": photo, "document": None, "gif": False, "video": False, "sticker": False, "video_note": False,
+        "voice": False,
+    }
     fields.update(media)
 
     async def get_sender():
@@ -230,16 +237,24 @@ def test_rich_can_be_turned_off(tmp_path):
 
 
 def test_card():
-    assert card({}) == "<p><b>Оцени мем</b> 👇</p>"
-    html = card({10: ["Петя", "Оля"], 9: ["Вася"], 3: ["<Тимофей>"]})
+    assert card(MemeView()) == "<p><b>Оцени мем</b> 👇</p>"
+    html = card(MemeView({10: ["Петя", "Оля"], 9: ["Вася"], 3: ["<Тимофей>"]}))
     assert html.startswith("<p><b>😂 Годнота</b> · ⭐ <b>8.0</b></p><p>▰▰▰▰▰▰▰▰▱▱ · 4 голоса</p><details>")
     assert html.index("<b>10</b>") < html.index("<b>9</b>") < html.index("<b>3</b>")
     assert "<td>Петя, Оля</td>" in html and "<td>&lt;Тимофей&gt;</td>" in html
+    repeat = MemeView(repeat="🔁 Баян! Уже было вчера")
+    assert card(repeat) == "<p><b>Оцени мем</b> 👇</p><p>🔁 Баян! Уже было вчера</p>"
+    assert header(repeat) == "Оцени мем 👇\n🔁 Баян! Уже было вчера"
 
 
 def test_verdicts_bars_and_the_joke_getting_louder():
     assert [verdict(a) for a in (1, 2.9, 3, 5, 7, 8.9, 9, 10)] == [
         "💀 Кринж", "💀 Кринж", "😐 Так себе", "🙂 Норм", "😂 Годнота", "😂 Годнота", "🔥 Шедевр", "🔥 Шедевр"]
+    assert verdict(10, {10: ["a", "b", "c"]}) == "🤯 Единогласный шедевр"
+    assert verdict(10, {10: ["a", "b"]}) == "🔥 Шедевр"  # two isn't everybody yet
+    assert verdict(1, {1: ["a", "b", "c"]}) == "⚰️ Похороны мема"
+    assert verdict(5.5, {10: ["a"], 1: ["b"], 6: ["c"]}) == "⚔️ Мем раскола"
+    assert [ago(s) for s in (60, 86400 + 5, 3 * 86400, 5 * 86400)] == ["сегодня", "вчера", "3 дня назад", "5 дней назад"]
     assert bar(7.6) == "▰▰▰▰▰▰▰▰▱▱" and bar(10) == "▰" * 10 and bar(1.2) == "▰" + "▱" * 9
     assert [joke_label("шутка", n) for n in (0, 1, 3, 5)] == ["шутка", "шутка · 1", "шутка · 3 🔥", "шутка · 5 🚨"]
 
@@ -251,11 +266,17 @@ def test_inline_mode_off_tells_the_panel_once(tmp_path):
     assert len(notes) == 1 and "/setinline" in notes[0]
 
 
-def scored(journal, chat_id, meme_id, author_id, author, ts, scores):
+VOTERS = ["Петя", "Оля", "Вася", "Тимофей", "Аня"]
+
+
+def scored(journal, chat_id, meme_id, author_id, author, ts, scores, repeat_of=None, jokes=0):
     token = abs(chat_id) * 1000 + meme_id
-    journal.add_meme(token, chat_id, meme_id, author_id, author, ts=ts)
+    journal.add_meme(token, chat_id, meme_id, author_id, author, ts=ts, repeat_of=repeat_of)
     for voter, score in enumerate(scores):
-        journal.vote_meme(token, voter, score)
+        journal.vote_meme(token, 100 + voter, score, VOTERS[voter])
+    for voter in range(jokes):
+        journal.toggle_meme_joke(token, 200 + voter)
+    return token
 
 
 def test_top_of_the_week(tmp_path):
@@ -278,6 +299,10 @@ def test_top_of_the_week(tmp_path):
         "1. Петя — 8.0 в среднем, 1 мем",
         "2. Вася — 7.8 в среднем, 2 мема",
         "3. Оля — 7.0 в среднем, 1 мем",
+        "",
+        "🎖 Номинации",
+        "🥶 Душнила недели: Оля — ставит в среднем 7.5",
+        "🤡 Щедрая душа: Петя — ставит в среднем 7.8",
     ])
     assert format_top(journal, 5, now) == "За неделю ещё ни один мем не получил оценок"
 
@@ -303,7 +328,7 @@ def test_weekly_top_on_sunday_afternoon_once(tmp_path):
 def test_words():
     assert [plural(n, "голос", "голоса", "голосов") for n in (1, 2, 5, 11, 21, 22, 112)] == [
         "голос", "голоса", "голосов", "голосов", "голос", "голоса", "голосов"]
-    assert header(7.25, 1) == "😂 Годнота · ⭐ 7.2 (1 голос)"
+    assert header(MemeView({7: ["a", "b"], 8: ["c"]})) == "😂 Годнота · ⭐ 7.3 (3 голоса)"
     assert link(5, 3) == ""
 
 
@@ -317,3 +342,34 @@ def test_memes_command(tmp_path):
     assert run(".memes", chat_id=None).is_error
     assert run(".memes лол").is_error
     assert Store(store.path).memes == {}
+
+
+def test_a_repost_is_called_out_and_the_author_rating_themselves_gets_a_smirk(tmp_path):
+    ratings, userbot, bot, journal, _ = make(tmp_path)
+    asyncio.run(ratings.on_message(message(msg_id=1, media_id=77)))
+    first = token_of(userbot)
+    asyncio.run(bot.handlers[1](Click(f"mr:{first}:8", 21)))
+    asyncio.run(bot.handlers[1](Click(f"mr:{first}:6", 11, "Вася")))  # Вася posted it
+    assert "<td>Вася 😏</td>" in bot.requests[-1].rich_message.html
+
+    asyncio.run(ratings.on_message(message(msg_id=2, media_id=78)))  # another meme
+    assert ratings.view(token_of(userbot)).repeat == ""
+    asyncio.run(ratings.on_message(message(msg_id=3, media_id=77, sender_id=12)))  # the first one again
+    again = token_of(userbot)
+    assert ratings.view(again).repeat == "🔁 Баян! Уже было сегодня, набрал 7.0"
+    assert ratings.view(again, now=journal.get_meme(first)[1] + 2 * 86400).repeat.startswith("🔁 Баян! Уже было 2 дня")
+
+
+def test_nominations(tmp_path):
+    journal = Journal(tmp_path / "assistant.db")
+    now, day = 30 * 86400, 86400
+    first = scored(journal, 5, 1, 1, "Вася", now - day, [2, 9, 5], jokes=2)
+    scored(journal, 5, 2, 2, "Петя", now - day, [3, 10, 5], jokes=1)
+    scored(journal, 5, 3, 1, "Вася", now - day, [1, 9, 5], repeat_of=first)
+    assert nominations(journal, 5, 0, "шутка") == [
+        "🥶 Душнила недели: Петя — ставит в среднем 2.0",
+        "🤡 Щедрая душа: Оля — ставит в среднем 9.3",
+        "🫵 «шутка» чаще всех под мемами: Вася ×2",
+        "🔁 Баянист недели: Вася ×1",
+    ]
+    assert nominations(journal, 5, now, "шутка") == []  # nothing this recent
