@@ -345,7 +345,7 @@ def setup(bot: TelegramClient, assistant, store: Store, owner_id: int, webapp_ur
             chat_id = int(chat)
             label = labels.get(chat_id) or await assistant.label_for(chat_id)
             store.set_memes(chat_id, mode == "on", label)
-            await event.answer("Под мемами будут кнопки 1–10" if mode == "on" else "Больше не оцениваем мемы")
+            await event.answer("Под мемами будут кнопки 1–5" if mode == "on" else "Больше не оцениваем мемы")
             await edit(event, person_screen(store, chat_id, label, assistant.deepseek_available))
         elif name == "aimode":
             chat, _, mode = arg.partition(":")

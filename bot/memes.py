@@ -1,5 +1,5 @@
 """Meme ratings (".memes"): in the chats I picked, every meme — a photo, a
-video or a GIF, mine or anyone's — gets a reply with buttons 1–10, plus a
+video or a GIF, mine or anyone's — gets a reply with buttons 1–5, plus a
 joke button if one is set. The average is in the message and changes with
 every click, on one line with a bar. ".top" shows the week's best memes and authors, and every
 Sunday afternoon each chat gets it by itself.
@@ -13,7 +13,7 @@ The rating is a rich message (Telegram's HTML blocks): the average in
 bold and how people voted in a collapsible table. If Telegram won't take a
 rich message from me, the same goes out as plain text; the journal keeps
 which one each meme got, so clicks edit it the right way. The buttons are
-colored: 1–3 red, 8–10 green, the joke blue.
+colored: 1–2 red, 4–5 green, the joke blue, on a row of its own.
 
 The card has a few jokes of its own: a verdict that follows the average
 (with special ones when everybody agrees, or nobody does), "🔁 Баян!" for a
@@ -50,7 +50,8 @@ QUESTION = "Оцени мем"
 NOBODY = "😶 Никто не оценил"
 # After this long the rating closes: the buttons go, the card stays.
 CLOSE_AFTER_SECONDS = 3600
-SCORES = range(1, 11)
+SCORES = range(1, 6)
+TOP_SCORE = SCORES[-1]
 CHECK_EVERY_SECONDS = 60
 TOP_DAYS = 7
 SUNDAY = 6
@@ -85,7 +86,7 @@ def votes(n: int) -> str:
 # When everybody (at least this many) agrees, or nobody does, the verdict says so.
 CONSENSUS_VOTERS = 3
 # The verdict the card shows: below this average -> these words.
-VERDICTS = ((3, "💀 Кринж"), (5, "😐 Так себе"), (7, "🙂 Норм"), (9, "😂 Годнота"), (11, "🔥 Шедевр"))
+VERDICTS = ((1.8, "💀 Кринж"), (2.6, "😐 Так себе"), (3.4, "🙂 Норм"), (4.2, "😂 Годнота"), (6, "🔥 Шедевр"))
 # What the joke button says back, at random.
 JOKE_TOASTS = ("😏 Засчитано", "📝 Записал в протокол", "🫡 Принято", "🤝 Ты не один такой", "🗿 Факт")
 JOKE_UNDO_TOASTS = ("🙊 Беру слова назад", "🤐 Ладно, замяли")
@@ -111,18 +112,18 @@ class MemeView:
 
 def verdict(avg: float, scores: dict[int, list[str]] | None = None) -> str:
     if scores and sum(len(names) for names in scores.values()) >= CONSENSUS_VOTERS:
-        if set(scores) == {10}:
+        if set(scores) == {TOP_SCORE}:
             return "🤯 Единогласный шедевр"
         if set(scores) == {1}:
             return "⚰️ Похороны мема"
-        if min(scores) == 1 and max(scores) == 10:
+        if min(scores) == 1 and max(scores) == TOP_SCORE:
             return "⚔️ Мем раскола"
     return next(words for limit, words in VERDICTS if avg < limit)
 
 
 def bar(avg: float) -> str:
     filled = round(avg)
-    return "▰" * filled + "▱" * (10 - filled)
+    return "▰" * filled + "▱" * (TOP_SCORE - filled)
 
 
 def ago(seconds: float) -> str:
@@ -184,21 +185,18 @@ def button(text: str, data: str, **style) -> types.KeyboardInlineButton:
 
 
 def score_style(score: int) -> dict:
-    if score <= 3:
+    if score <= 2:
         return {"bg_danger": True}
-    if score >= 8:
+    if score >= 4:
         return {"bg_success": True}
     return {}
 
 
 def buttons(token: int, joke: str = "", jokes: int = 0) -> list:
-    """Two rows, 1–5 and 6–10, the joke at the end of the second."""
-    rows = [
-        [button(str(n), f"{DATA}{token}:{n}", **score_style(n)) for n in SCORES[:5]],
-        [button(str(n), f"{DATA}{token}:{n}", **score_style(n)) for n in SCORES[5:]],
-    ]
+    """1–5 in a row, the joke on a row of its own under them."""
+    rows = [[button(str(n), f"{DATA}{token}:{n}", **score_style(n)) for n in SCORES]]
     if joke:
-        rows[1].append(button(joke_label(joke, jokes), f"{DATA}{token}:j", bg_primary=True))
+        rows.append([button(joke_label(joke, jokes), f"{DATA}{token}:j", bg_primary=True)])
     return rows
 
 
@@ -216,7 +214,7 @@ def format_top(journal: Journal, chat_id: int, now: float, joke: str = "") -> st
     lines = ["🏆 Лучшие мемы недели"]
     for place, (meme_id, author, score, voters) in enumerate(memes, 1):
         url = link(chat_id, meme_id)
-        lines.append(f"{place}. {score:.1f}/10 — {author} ({votes(voters)})" + (f" {url}" if url else ""))
+        lines.append(f"{place}. {score:.1f}/{TOP_SCORE} — {author} ({votes(voters)})" + (f" {url}" if url else ""))
     lines.append("")
     lines.append("👑 Лучшие авторы")
     for place, (author, score, count) in enumerate(journal.best_meme_authors(chat_id, since), 1):
@@ -445,7 +443,11 @@ class MemeRatings:
                 except (RPCError, ValueError):
                     voter = None
                 name = getattr(voter, "first_name", None) or (utils.get_display_name(voter) if voter else "")
-                self.journal.vote_meme(token, event.sender_id, int(choice), name)
+                score = int(choice)
+                if score > TOP_SCORE:  # a button of a card from the 1–10 days
+                    score = (score + 1) // 2
+                self.journal.vote_meme(token, event.sender_id, score, name)
+                choice = str(score)
                 toast = f"Твоя оценка: {choice}"
             await self.show(token, event.query.msg_id)
             await event.answer(toast)

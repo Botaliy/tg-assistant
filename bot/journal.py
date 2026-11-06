@@ -120,6 +120,10 @@ class Journal:
                 self.db.execute(f"ALTER TABLE {table} ADD COLUMN {column}")
             except sqlite3.OperationalError:
                 pass  # already there
+        # Memes were rated 1–10 before; now 1–5: 9–10 -> 5, 7–8 -> 4, ...
+        if self.get_meta("meme_scale") != "5":
+            self.db.execute("UPDATE meme_votes SET score = (score + 1) / 2 WHERE score IS NOT NULL")
+            self.set_meta("meme_scale", "5")
 
     # Daily AI reply counters: what the limits are checked against.
 

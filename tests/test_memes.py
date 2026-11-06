@@ -178,13 +178,13 @@ def test_inline_answer_is_a_rich_card_with_colored_buttons_and_only_for_me(tmp_p
     [result] = request.results
     message = result.send_message
     assert message.rich_message.html == "<p><b>Оцени мем</b> 👇</p>"
-    assert labels(message.reply_markup) == [["1", "2", "3", "4", "5"], ["6", "7", "8", "9", "10", "шутка"]]
-    assert colors(message.reply_markup) == ["rrr--", "--gggb"]
+    assert labels(message.reply_markup) == [["1", "2", "3", "4", "5"], ["шутка"]]
+    assert colors(message.reply_markup) == ["rr-gg", "b"]
 
     plain = Inline("meme 123 plain")
     asyncio.run(on_inline(plain))
     [article] = plain.answers
-    assert article.text == "Оцени мем 👇" and labels(article.buttons)[1][-1] == "шутка"
+    assert article.text == "Оцени мем 👇" and labels(article.buttons)[1] == ["шутка"]
 
     for stranger in (Inline("meme 123", sender_id=2), Inline("котики"), Inline("meme 12x plain")):
         asyncio.run(on_inline(stranger))
@@ -198,21 +198,21 @@ def test_clicks_change_the_card_one_vote_per_person(tmp_path):
     token = token_of(userbot)
     on_click = bot.handlers[-1]
 
-    for data, who, name in ((f"mr:{token}:10", 21, "Петя"), (f"mr:{token}:7", 22, "Оля"), (f"mr:{token}:4", 21, "Петя")):
+    for data, who, name in ((f"mr:{token}:5", 21, "Петя"), (f"mr:{token}:4", 22, "Оля"), (f"mr:{token}:2", 21, "Петя")):
         click = Click(data, who, name)
         asyncio.run(on_click(click))
-    assert click.toast == "Твоя оценка: 4"
+    assert click.toast == "Твоя оценка: 2"
     html = bot.requests[-1].rich_message.html
-    assert html.startswith("<p><b>🙂 Норм</b> ⭐ <b>5.5</b> ▰▰▰▰▰▰▱▱▱▱ 👥 2</p><details>")
-    assert "<b>7</b></td><td>Оля</td>" in html and "<b>4</b></td><td>Петя</td>" in html
+    assert html.startswith("<p><b>🙂 Норм</b> ⭐ <b>3.0</b> ▰▰▰▱▱ 👥 2</p><details>")
+    assert "<b>4</b></td><td>Оля</td>" in html and "<b>2</b></td><td>Петя</td>" in html
 
     joke = Click(f"mr:{token}:j", 23)
     asyncio.run(on_click(joke))
     assert joke.toast.startswith(("😏", "📝", "🫡", "🤝", "🗿"))
-    assert labels(bot.requests[-1].reply_markup)[1][-1] == "шутка · 1"
-    assert "5.5" in bot.requests[-1].rich_message.html  # the joke isn't a score
+    assert labels(bot.requests[-1].reply_markup)[1] == ["шутка · 1"]
+    assert "3.0" in bot.requests[-1].rich_message.html  # the joke isn't a score
     asyncio.run(on_click(Click(f"mr:{token}:j", 23)))
-    assert labels(bot.requests[-1].reply_markup)[1][-1] == "шутка"
+    assert labels(bot.requests[-1].reply_markup)[1] == ["шутка"]
     assert bot.edits == []  # all rich
 
     gone = Click("mr:999:5", 21)
@@ -226,8 +226,8 @@ def test_falls_back_to_plain_text_and_edits_it_as_such(tmp_path):
     [(_, query, reply_to)] = userbot.clicks
     assert query.endswith(" plain") and reply_to == 7 and notes == []
     token = token_of(userbot)
-    asyncio.run(bot.handlers[-1](Click(f"mr:{token}:9", 21)))
-    assert bot.edits[-1][1] == "🔥 Шедевр ⭐ 9.0 · 👥 1" and bot.requests == []
+    asyncio.run(bot.handlers[-1](Click(f"mr:{token}:5", 21)))
+    assert bot.edits[-1][1] == "🔥 Шедевр ⭐ 5.0 · 👥 1" and bot.requests == []
 
 
 def test_rich_can_be_turned_off(tmp_path):
@@ -238,9 +238,9 @@ def test_rich_can_be_turned_off(tmp_path):
 
 def test_card():
     assert card(MemeView()) == "<p><b>Оцени мем</b> 👇</p>"
-    html = card(MemeView({10: ["Петя", "Оля"], 9: ["Вася"], 3: ["<Тимофей>"]}))
-    assert html.startswith("<p><b>😂 Годнота</b> ⭐ <b>8.0</b> ▰▰▰▰▰▰▰▰▱▱ 👥 4</p><details>")
-    assert html.index("<b>10</b>") < html.index("<b>9</b>") < html.index("<b>3</b>")
+    html = card(MemeView({5: ["Петя", "Оля"], 4: ["Вася"], 2: ["<Тимофей>"]}))
+    assert html.startswith("<p><b>😂 Годнота</b> ⭐ <b>4.0</b> ▰▰▰▰▱ 👥 4</p><details>")
+    assert html.index("<b>5</b>") < html.index("<b>4</b>") < html.index("<b>2</b>")
     assert "<td>Петя, Оля</td>" in html and "<td>&lt;Тимофей&gt;</td>" in html
     repeat = MemeView(repeat="🔁 Баян · вчера")
     assert card(repeat) == "<p><b>Оцени мем</b> 👇</p><p>🔁 Баян · вчера</p>"
@@ -250,14 +250,14 @@ def test_card():
 
 
 def test_verdicts_bars_and_the_joke_getting_louder():
-    assert [verdict(a) for a in (1, 2.9, 3, 5, 7, 8.9, 9, 10)] == [
+    assert [verdict(a) for a in (1, 1.7, 2, 3, 3.5, 4, 4.5, 5)] == [
         "💀 Кринж", "💀 Кринж", "😐 Так себе", "🙂 Норм", "😂 Годнота", "😂 Годнота", "🔥 Шедевр", "🔥 Шедевр"]
-    assert verdict(10, {10: ["a", "b", "c"]}) == "🤯 Единогласный шедевр"
-    assert verdict(10, {10: ["a", "b"]}) == "🔥 Шедевр"  # two isn't everybody yet
+    assert verdict(5, {5: ["a", "b", "c"]}) == "🤯 Единогласный шедевр"
+    assert verdict(5, {5: ["a", "b"]}) == "🔥 Шедевр"  # two isn't everybody yet
     assert verdict(1, {1: ["a", "b", "c"]}) == "⚰️ Похороны мема"
-    assert verdict(5.5, {10: ["a"], 1: ["b"], 6: ["c"]}) == "⚔️ Мем раскола"
+    assert verdict(3, {5: ["a"], 1: ["b"], 3: ["c"]}) == "⚔️ Мем раскола"
     assert [ago(s) for s in (60, 86400 + 5, 3 * 86400, 5 * 86400)] == ["сегодня", "вчера", "3 дня назад", "5 дней назад"]
-    assert bar(7.6) == "▰▰▰▰▰▰▰▰▱▱" and bar(10) == "▰" * 10 and bar(1.2) == "▰" + "▱" * 9
+    assert bar(3.6) == "▰▰▰▰▱" and bar(5) == "▰" * 5 and bar(1.2) == "▰" + "▱" * 4
     assert [joke_label("шутка", n) for n in (0, 1, 3, 5)] == ["шутка", "шутка · 1", "шутка · 3 🔥", "шутка · 5 🚨"]
 
 
@@ -293,9 +293,9 @@ def test_top_of_the_week(tmp_path):
     journal.add_meme(1, -1001234, 6, 3, "Оля", ts=now)  # nobody voted
     assert format_top(journal, -1001234, now) == "\n".join([
         "🏆 Лучшие мемы недели",
-        "1. 9.5/10 — Вася (4 голоса) https://t.me/c/1234/1",
-        "2. 8.0/10 — Петя (5 голосов) https://t.me/c/1234/3",
-        "3. 7.0/10 — Оля (2 голоса) https://t.me/c/1234/5",
+        "1. 9.5/5 — Вася (4 голоса) https://t.me/c/1234/1",
+        "2. 8.0/5 — Петя (5 голосов) https://t.me/c/1234/3",
+        "3. 7.0/5 — Оля (2 голоса) https://t.me/c/1234/5",
         "",
         "👑 Лучшие авторы",
         "1. Петя — 8.0 в среднем, 1 мем",
@@ -322,7 +322,7 @@ def test_weekly_top_on_sunday_afternoon_once(tmp_path):
     asyncio.run(ratings.weekly_top(sunday))
     asyncio.run(ratings.weekly_top(sunday.replace(hour=20)))  # already sent
     [(chat_id, text)] = userbot.sent
-    assert chat_id == 5 and text.startswith("🏆 Лучшие мемы недели\n1. 8.5/10 — Вася")
+    assert chat_id == 5 and text.startswith("🏆 Лучшие мемы недели\n1. 8.5/5 — Вася")
     asyncio.run(ratings.weekly_top(sunday + datetime.timedelta(days=7)))  # next week, no new scores
     assert len(userbot.sent) == 1
 
@@ -330,7 +330,7 @@ def test_weekly_top_on_sunday_afternoon_once(tmp_path):
 def test_words():
     assert [plural(n, "голос", "голоса", "голосов") for n in (1, 2, 5, 11, 21, 22, 112)] == [
         "голос", "голоса", "голосов", "голосов", "голос", "голоса", "голосов"]
-    assert header(MemeView({7: ["a", "b"], 8: ["c"]})) == "😂 Годнота ⭐ 7.3 · 👥 3"
+    assert header(MemeView({4: ["a", "b"], 3: ["c"]})) == "😂 Годнота ⭐ 3.7 · 👥 3"
     assert link(5, 3) == ""
 
 
@@ -350,15 +350,15 @@ def test_a_repost_is_called_out_and_the_author_rating_themselves_gets_a_smirk(tm
     ratings, userbot, bot, journal, _ = make(tmp_path)
     asyncio.run(ratings.on_message(message(msg_id=1, media_id=77)))
     first = token_of(userbot)
-    asyncio.run(bot.handlers[-1](Click(f"mr:{first}:8", 21)))
-    asyncio.run(bot.handlers[-1](Click(f"mr:{first}:6", 11, "Вася")))  # Вася posted it
+    asyncio.run(bot.handlers[-1](Click(f"mr:{first}:4", 21)))
+    asyncio.run(bot.handlers[-1](Click(f"mr:{first}:3", 11, "Вася")))  # Вася posted it
     assert "<td>Вася 😏</td>" in bot.requests[-1].rich_message.html
 
     asyncio.run(ratings.on_message(message(msg_id=2, media_id=78)))  # another meme
     assert ratings.view(token_of(userbot)).repeat == ""
     asyncio.run(ratings.on_message(message(msg_id=3, media_id=77, sender_id=12)))  # the first one again
     again = token_of(userbot)
-    assert ratings.view(again).repeat == "🔁 Баян · сегодня · ⭐ 7.0"
+    assert ratings.view(again).repeat == "🔁 Баян · сегодня · ⭐ 3.5"
     assert ratings.view(again, now=journal.get_meme(first)[1] + 2 * 86400).repeat.startswith("🔁 Баян · 2 дня")
 
 
@@ -390,7 +390,7 @@ def test_a_rating_closes_after_an_hour(tmp_path):
     asyncio.run(on_inline_sent(types.UpdateBotInlineSend(user_id=2, query="", id="1", msg_id=None)))  # not mine
     asyncio.run(ratings.on_message(message(msg_id=3)))
     unknown = token_of(userbot)  # no clicks, no feedback: closes on its next click
-    asyncio.run(on_click(Click(f"mr:{clicked}:9", 21)))
+    asyncio.run(on_click(Click(f"mr:{clicked}:5", 21)))
     born = journal.get_meme(clicked)[1]
 
     bot.requests.clear()
@@ -400,7 +400,7 @@ def test_a_rating_closes_after_an_hour(tmp_path):
     closed = {r.id.id: r for r in bot.requests}
     assert closed.keys() == {21, 9}
     assert all(r.reply_markup is None for r in closed.values())
-    assert closed[21].rich_message.html.startswith("<p><b>🔥 Шедевр</b> ⭐ <b>9.0</b>")
+    assert closed[21].rich_message.html.startswith("<p><b>🔥 Шедевр</b> ⭐ <b>5.0</b>")
     assert closed[9].rich_message.html == "<p>😶 Никто не оценил</p>"
     asyncio.run(ratings.close_old(now=born + 7200))
     assert len(bot.requests) == 2  # once
@@ -410,3 +410,22 @@ def test_a_rating_closes_after_an_hour(tmp_path):
     asyncio.run(on_click(late))
     assert late.toast == "⏰ Голосование уже закрыто"
     assert bot.requests[-1].reply_markup is None and journal.meme_tally(unknown)[1] == 0
+
+
+def test_old_ten_point_votes_and_buttons_turn_into_five(tmp_path):
+    journal = Journal(tmp_path / "old.db")
+    journal.add_meme(1, 5, 1, 11, "Вася")
+    for user, score in ((1, 10), (2, 9), (3, 8), (4, 2), (5, 1)):
+        journal.vote_meme(1, user, score)
+    journal.set_meta("meme_scale", "10")  # as it was before
+    journal = Journal(tmp_path / "old.db")
+    assert sorted(journal.meme_scores(1)) == [1, 4, 5]
+    assert {s: len(v) for s, v in journal.meme_scores(1).items()} == {5: 2, 4: 1, 1: 2}
+    journal = Journal(tmp_path / "old.db")  # once
+    assert sorted(journal.meme_scores(1)) == [1, 4, 5]
+
+    ratings, userbot, bot, journal, _ = make(tmp_path)
+    asyncio.run(ratings.on_message(message()))
+    old_button = Click(f"mr:{token_of(userbot)}:8", 21)  # a 1–10 card still in the chat
+    asyncio.run(bot.handlers[-1](old_button))
+    assert old_button.toast == "Твоя оценка: 4"

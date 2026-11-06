@@ -39,7 +39,7 @@ class Store:
         self.muted: dict[int, str] = {}  # chat id -> label for .rules
         # Chats where Claude deletes insults (".filter ai"): chat id -> label.
         self.insult_filter: dict[int, str] = {}
-        # Chats where every meme gets a 1–10 poll (".memes"): chat id -> label.
+        # Chats where every meme gets 1–5 buttons (".memes"): chat id -> label.
         self.memes: dict[int, str] = {}
         # Whether the userbot has already pressed /start in the panel bot for me.
         self.panel_started = False

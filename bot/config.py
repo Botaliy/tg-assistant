@@ -52,7 +52,7 @@ class Settings(BaseSettings):
     # Checks per chat per day, so a flood can't run up the bill; past it the
     # messages stay unchecked until tomorrow.
     ai_filter_daily_per_chat: int = 300
-    # A joke button under every meme, next to 1–10 (".memes"): its text,
+    # A joke button under every meme, under 1–5 (".memes"): its text,
     # with how many pressed it. Empty = no such button.
     meme_joke_button: str = ""
     # The rating as a rich message (bold average, a collapsible table of
