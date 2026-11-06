@@ -5,6 +5,7 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
+from zoneinfo import ZoneInfo
 
 from telethon import TelegramClient, events, functions, types, utils
 from telethon.errors import RPCError
@@ -13,6 +14,7 @@ from bot import commands, monitor, panel
 from bot.commands import Answer, error
 from bot.config import Settings, get_settings
 from bot.journal import Journal, format_usage
+from bot.memes import MemePolls
 from bot.rules import Cooldown
 from bot.store import Store
 
@@ -38,6 +40,7 @@ class Assistant:
         self.journal = journal
         self.ai_available = ai_available
         self.ai: AiResponder | None = None  # set once the AI is up
+        self.memes: MemePolls | None = None
         self.send_backup: Callable[[], Awaitable[None]] | None = None  # set once the panel is up
         self._tasks: set[asyncio.Task] = set()
 
@@ -195,6 +198,12 @@ class Assistant:
             return Answer(f"Лимит ИИ для {label or chat_id} сброшен")
         if cmd.name == "usage":
             return Answer(self.usage())
+        if cmd.name == "top":
+            if chat_id is None:
+                return error("Какой чат? Формат: .top @чат")
+            if self.memes is None:
+                return error("Оценка мемов ещё не запустилась")
+            return Answer(self.memes.top(chat_id))
         if cmd.name == "sum":
             if chat_id is None:
                 return error("Какой чат? Формат: .sum @чат [N]")
@@ -221,6 +230,7 @@ def setup_userbot(
     client: TelegramClient, assistant: Assistant, store: Store,
     cooldown: Cooldown, notify: Callable[[str], Awaitable[None]], panel_id: int,
     ai: "AiResponder | None", insults: "InsultFilter | None" = None,
+    memes: MemePolls | None = None,
 ) -> None:
     @client.on(events.NewMessage(outgoing=True))
     async def on_command(event) -> None:
@@ -228,9 +238,13 @@ def setup_userbot(
             return  # commands to the panel bot are its business
         if ai is not None and ai.is_own(event):
             return  # the AI's reply is never a command, whatever it says
+        if memes is not None and memes.is_own(event):
+            return  # a meme poll or its score, not me writing
         # A forwarded message is someone else's text, even if it starts with a dot.
         cmd = None if event.fwd_from else commands.parse(event.raw_text)
         if cmd is None:
+            if memes is not None:
+                await memes.on_message(event.message)  # my memes get rated too
             if ai is not None:
                 await ai.on_outgoing(event)
             return
@@ -247,6 +261,10 @@ def setup_userbot(
                     answer = Answer("Удалено")
                 else:
                     answer = error("Не получилось удалить сообщение")
+            elif cmd.name == "top" and not cmd.target and memes is not None:
+                # Typed in the chat: the top is for everyone there, not for the panel.
+                await memes.send(event.chat_id, message=memes.top(event.chat_id), link_preview=False)
+                return
             elif cmd.name == "del" and not cmd.target:
                 count = commands.parse_del_count(cmd.arg)
                 answer = await assistant.delete_last(event.chat_id, count, title)
@@ -290,6 +308,8 @@ def setup_userbot(
         sender = await event.get_sender()
         if getattr(sender, "bot", False):
             return  # two auto-responders talking to each other never ends well
+        if memes is not None:
+            await memes.on_message(event.message)
         mention_id = event.id if event.mentioned else None
         if ai is not None and await ai.on_incoming(event.chat_id, sender, mention_id, event.message):
             return  # the AI answers instead of keyword rules
@@ -360,10 +380,15 @@ async def run() -> None:
             takeover_seconds=settings.ai_takeover_minutes * 60,
         )
         ai.resume_reports()
+    memes = MemePolls(
+        client, store, journal, settings.meme_poll_hours, settings.meme_top_hour, ZoneInfo(settings.timezone),
+    )
     setup_userbot(
         client, assistant, store, Cooldown(settings.reply_cooldown_seconds), notify, bot_me.id, ai, insults,
+        memes,
     )
     assistant.ai = ai
+    assistant.memes = memes
     panel.setup(bot, assistant, store, owner_id=me.id, webapp_url=settings.webapp_url)
     if settings.webapp_url:
         # Imported only when needed, like the AI: aiohttp is a few MB.
@@ -401,7 +426,7 @@ async def run() -> None:
         log.info("DeepSeek on: %s, effort %s", ai.deepseek.model, ai.deepseek.effort or "default")
     # A restart I didn't make (a crash, the server rebooting) shows up here.
     await notify("🟢 Бот запущен")
-    jobs = [client.run_until_disconnected(), bot.run_until_disconnected()]
+    jobs = [client.run_until_disconnected(), bot.run_until_disconnected(), memes.run()]
     if settings.healthcheck_url:
         jobs.append(monitor.heartbeat([client, bot], settings.healthcheck_url))
     if settings.backup_days > 0:

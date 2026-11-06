@@ -18,7 +18,7 @@ from bot.rules import DELETE, REPLY
 from bot.store import DEEPSEEK, Store
 
 PREFIX = "."
-NAMES = {"help", "del", "mute", "unmute", "reply", "filter", "rules", "unrule", "ai", "noai", "persona", "ans", "reset", "model", "usage", "draft", "sum", "backup"}
+NAMES = {"help", "del", "mute", "unmute", "reply", "filter", "rules", "unrule", "ai", "noai", "persona", "ans", "reset", "model", "usage", "draft", "sum", "backup", "memes", "top"}
 NO_AI = "ИИ выключен: впиши ANTHROPIC_API_KEY в .env на сервере и перезапусти бота"
 NO_DEEPSEEK = "DeepSeek не настроен: впиши DEEPSEEK_API_KEY в .env на сервере и перезапусти бота"
 # What ".model" understands; None is Claude.
@@ -29,7 +29,7 @@ MODELS = {"deepseek": DEEPSEEK, "ds": DEEPSEEK, "claude": None, "-": None}
 MAX_DRAFT_CONTEXT = 50
 # ".sum N" reads at most this many messages.
 MAX_SUM = 300
-OUTPUT_COMMANDS = {"help", "rules", "persona", "model", "usage"}
+OUTPUT_COMMANDS = {"help", "rules", "persona", "model", "usage", "top"}
 
 HELP = """Всё есть на кнопках в /menu. Перешли сюда сообщение человека, и появятся кнопки для него.
 
@@ -55,6 +55,8 @@ HELP = """Всё есть на кнопках в /menu. Перешли сюда 
 .model @user deepseek / .model @user claude — чем ИИ отвечает ему (без модели — показать)
 .usage — сколько ИИ потратил сегодня и за месяц
 .sum @чат [N] — выжимка непрочитанного в чате (или последних N сообщений, до 300) сюда
+.memes @чат / .memes @чат off — опрос «Оцени мем 1–10» под каждым мемом там / перестать
+.top @чат — лучшие мемы и авторы там за неделю
 .backup — прислать сюда копию правил и базы
 Вместо @user можно +телефон из контактов или #id из .rules.
 
@@ -65,6 +67,8 @@ HELP = """Всё есть на кнопках в /menu. Перешли сюда 
 .draft [N] — то же, но черновиком в пульт, по последним N сообщениям
 .ai draft — ИИ в этом чате только присылает черновики в пульт
 .filter ai / .filter ai off — Claude удаляет оскорбления в этом чате / перестать
+.memes / .memes off — опрос «Оцени мем 1–10» под каждым мемом в этом чате / перестать
+.top — лучшие мемы и авторы недели, прямо в этот чат
 .sum [N] — выжимка последних N сообщений чата в пульт (без N — непрочитанного)
 .ai on / .ai off — включить / выключить ИИ только в этом чате (.ai off = .noai)
 .model deepseek / .model claude — чем ИИ отвечает в этом чате
@@ -228,6 +232,17 @@ def execute(store: Store, cmd: Command, chat_id: int | None, label: str = "") ->
             return Answer(f"Удаляю оскорбления {scope}" if changed else f"Оскорбления {scope} уже удаляются")
         return Answer(f"Больше не удаляю оскорбления {scope}" if changed else f"Оскорбления {scope} и не удалялись")
 
+    if cmd.name == "memes":
+        if chat_id is None:
+            return error("В каком чате? Формат: .memes @чат")
+        if cmd.arg.lower() not in ("", "on", "off"):
+            return error("Формат: .memes или .memes off")
+        on = cmd.arg.lower() != "off"
+        changed = store.set_memes(chat_id, on, label)
+        if on:
+            return Answer(f"Оцениваем мемы {scope}" if changed else f"Мемы {scope} уже оцениваются")
+        return Answer(f"Больше не оцениваем мемы {scope}" if changed else f"Мемы {scope} и не оценивались")
+
     if cmd.name == "filter":
         keywords = split_keywords(cmd.arg)
         if not keywords:
@@ -277,6 +292,12 @@ def format_rules(store: Store, chat_id: int | None) -> str:
     ]
     if insults:
         lines.append("Удаляю оскорбления: " + ", ".join(insults))
+    memes = [
+        f"{label} #{c}".strip() for c, label in sorted(store.memes.items())
+        if chat_id is None or c == chat_id
+    ]
+    if memes:
+        lines.append("Оцениваем мемы: " + ", ".join(memes))
     ai = [
         f"{'🆕 ' if a.auto else ''}{'📝 ' if a.drafts else ''}{a.label} #{c}"
         f"{f' (⏸ ты в чате, ещё {left} мин)' if (left := a.pause_left()) else ''}".strip()

@@ -31,7 +31,7 @@ MAX_AUTH_AGE_SECONDS = 24 * 3600
 # What the page may run: the panel's commands, minus deleting messages.
 COMMANDS = {
     "ai", "noai", "model", "persona", "reply", "filter", "unrule", "mute", "unmute",
-    "reset", "ans", "draft", "sum", "backup",
+    "reset", "ans", "draft", "sum", "backup", "memes",
 }
 
 
@@ -72,7 +72,7 @@ def build_app(assistant, bot_token: str, owner_id: int) -> web.Application:
 
     def label(chat_id: int) -> str:
         chat = store.ai_chats.get(chat_id)
-        return (chat.label if chat else "") or store.muted.get(chat_id, "") or store.insult_filter.get(chat_id, "")
+        return (chat.label if chat else "") or store.muted.get(chat_id, "") or store.insult_filter.get(chat_id, "") or store.memes.get(chat_id, "")
 
     async def state(request: web.Request) -> web.Response:
         ai = assistant.ai
@@ -107,6 +107,7 @@ def build_app(assistant, bot_token: str, owner_id: int) -> web.Application:
             "rules": [r.to_dict() for r in store.rules],
             "muted": [{"id": c, "label": lbl} for c, lbl in sorted(store.muted.items())],
             "insult_filter": [{"id": c, "label": lbl} for c, lbl in sorted(store.insult_filter.items())],
+            "memes": [{"id": c, "label": lbl} for c, lbl in sorted(store.memes.items())],
             "usage": {
                 "today": spend(day.isoformat()),
                 "month": spend(day.replace(day=1).isoformat()),

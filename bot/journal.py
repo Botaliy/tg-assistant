@@ -1,6 +1,6 @@
 """What happens over time, in SQLite (data/assistant.db): daily AI reply
 counters, reports waiting to be sent, past reports, drafts waiting for my
-decision and tokens spent.
+decision, tokens spent and meme polls with their scores.
 
 Settings stay in rules.json (bot.store); this is the part that grows or used
 to be lost on a restart. Calls are synchronous: each is a tiny local query.
@@ -35,6 +35,13 @@ CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS drafts (
     id INTEGER PRIMARY KEY, ts REAL NOT NULL, chat_id INTEGER NOT NULL, label TEXT NOT NULL,
     text TEXT NOT NULL, reply_to INTEGER, context INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS meme_polls (
+    chat_id INTEGER NOT NULL, msg_id INTEGER NOT NULL, poll_id INTEGER NOT NULL,
+    meme_id INTEGER NOT NULL, author_id INTEGER, author TEXT NOT NULL,
+    ts REAL NOT NULL, close_at REAL NOT NULL,
+    closed INTEGER NOT NULL DEFAULT 0, score REAL, voters INTEGER,
+    PRIMARY KEY (chat_id, msg_id)
 );
 """
 
@@ -180,6 +187,49 @@ class Journal:
         """ts, chat id, label, reason, text; the newest first."""
         return self.db.execute(
             "SELECT ts, chat_id, label, reason, text FROM reports ORDER BY id DESC LIMIT ?", (limit,),
+        ).fetchall()
+
+    # Meme polls: open until close_at, then with the average score.
+
+    def add_meme_poll(
+        self, chat_id: int, msg_id: int, poll_id: int, meme_id: int,
+        author_id: int | None, author: str, close_at: float, ts: float | None = None,
+    ) -> None:
+        self.db.execute(
+            "INSERT OR REPLACE INTO meme_polls (chat_id, msg_id, poll_id, meme_id, author_id, author, ts, close_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (chat_id, msg_id, poll_id, meme_id, author_id, author, time.time() if ts is None else ts, close_at),
+        )
+
+    def meme_polls_due(self, now: float) -> list[tuple[int, int, int]]:
+        """Open polls past their time: chat id, poll message id, poll id."""
+        return self.db.execute(
+            "SELECT chat_id, msg_id, poll_id FROM meme_polls WHERE closed = 0 AND close_at <= ?", (now,),
+        ).fetchall()
+
+    def close_meme_poll(self, chat_id: int, msg_id: int, score: float | None, voters: int) -> None:
+        """score None: nobody voted, or the poll couldn't be read."""
+        self.db.execute(
+            "UPDATE meme_polls SET closed = 1, score = ?, voters = ? WHERE chat_id = ? AND msg_id = ?",
+            (score, voters, chat_id, msg_id),
+        )
+
+    def best_memes(self, chat_id: int, since: float, limit: int = 3) -> list[tuple[int, str, float, int]]:
+        """Scored memes since a time, the best first: meme id, author, score, voters."""
+        return self.db.execute(
+            "SELECT meme_id, author, score, voters FROM meme_polls "
+            "WHERE chat_id = ? AND ts >= ? AND score IS NOT NULL "
+            "ORDER BY score DESC, voters DESC, ts LIMIT ?",
+            (chat_id, since, limit),
+        ).fetchall()
+
+    def best_meme_authors(self, chat_id: int, since: float, limit: int = 3) -> list[tuple[str, float, int]]:
+        """Authors by the average of their memes' scores: author, average, memes."""
+        return self.db.execute(
+            "SELECT MAX(author), AVG(score), COUNT(*) FROM meme_polls "
+            "WHERE chat_id = ? AND ts >= ? AND score IS NOT NULL "
+            "GROUP BY COALESCE(author_id, author) ORDER BY AVG(score) DESC, COUNT(*) DESC LIMIT ?",
+            (chat_id, since, limit),
         ).fetchall()
 
     # Tokens and money.

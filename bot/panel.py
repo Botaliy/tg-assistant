@@ -118,6 +118,10 @@ def person_screen(store: Store, chat_id: int, label: str, deepseek_available: bo
         Button.inline("🤬 Не удалять оскорбления", f"insults:{chat_id}:off".encode()) if chat_id in store.insult_filter
         else Button.inline("🤬 Удалять оскорбления", f"insults:{chat_id}:on".encode())
     )
+    memes = (
+        Button.inline("🗳 Не оценивать мемы", f"memes:{chat_id}:off".encode()) if chat_id in store.memes
+        else Button.inline("🗳 Оценивать мемы", f"memes:{chat_id}:on".encode())
+    )
     on_deepseek = store.chat_models.get(chat_id) == DEEPSEEK
     rules = [r for r in store.rules if r.chat_id == chat_id]
     ai_chat = store.ai_chats.get(chat_id)
@@ -145,7 +149,7 @@ def person_screen(store: Store, chat_id: int, label: str, deepseek_available: bo
         [mute, Button.inline("🗑 Удалить последние", f"act:del:{chat_id}".encode())],
         [Button.inline("💬 Автоответ ему", f"act:reply:{chat_id}".encode()),
          Button.inline("🚫 Фильтр слов", f"act:filter:{chat_id}".encode())],
-        [insults],
+        [insults, memes],
         [ai, Button.inline("✍️ Ответить ИИ", f"ans:{chat_id}".encode())],
         [Button.inline("📝 Черновик ИИ", f"draftnow:{chat_id}".encode()),
          Button.inline("♻️ Сбросить лимит ИИ", f"reset:{chat_id}".encode())],
@@ -332,6 +336,13 @@ def setup(bot: TelegramClient, assistant, store: Store, owner_id: int, webapp_ur
             label = labels.get(chat_id) or await assistant.label_for(chat_id)
             store.set_insult_filter(chat_id, mode == "on", label)
             await event.answer("Claude удаляет оскорбления" if mode == "on" else "Больше не удаляю оскорбления")
+            await edit(event, person_screen(store, chat_id, label, assistant.deepseek_available))
+        elif name == "memes":
+            chat, _, mode = arg.partition(":")
+            chat_id = int(chat)
+            label = labels.get(chat_id) or await assistant.label_for(chat_id)
+            store.set_memes(chat_id, mode == "on", label)
+            await event.answer("Под мемами будет опрос 1–10" if mode == "on" else "Больше не оцениваем мемы")
             await edit(event, person_screen(store, chat_id, label, assistant.deepseek_available))
         elif name == "aimode":
             chat, _, mode = arg.partition(":")

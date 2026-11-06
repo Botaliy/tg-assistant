@@ -52,6 +52,14 @@ class Settings(BaseSettings):
     # Checks per chat per day, so a flood can't run up the bill; past it the
     # messages stay unchecked until tomorrow.
     ai_filter_daily_per_chat: int = 300
+    # A meme poll (".memes") closes after this long, the average goes to the
+    # chat and counts for ".top".
+    meme_poll_hours: float = 1
+    # Every Sunday from this hour the week's top goes to each meme chat by
+    # itself (only where memes got scores); -1 = never.
+    meme_top_hour: int = 14
+    # For meme_top_hour: an IANA name like Europe/Berlin.
+    timezone: str = "Europe/Berlin"
     # DeepSeek for chats switched to it (".model deepseek"), from
     # https://platform.deepseek.com. Empty key = only Claude.
     deepseek_api_key: str = ""

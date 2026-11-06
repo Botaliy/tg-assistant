@@ -514,6 +514,10 @@ function rules() {
     avatar: avatar(m.label, m.id), title: nameOf(m.label, m.id),
     right: btn("Выключить", () => run("filter", "ai off", {chat_id: m.id}), "soft small"),
   }));
+  const memeRows = (s.memes || []).map((m) => row({
+    avatar: avatar(m.label, m.id), title: nameOf(m.label, m.id),
+    right: btn("Выключить", () => run("memes", "off", {chat_id: m.id}), "soft small"),
+  }));
   return [
     head("Правила"),
     section("", [row({icon: "＋", title: "Новое правило", cls: "link", onclick: () => push(ruleScreen)}), ...ruleRows],
@@ -522,6 +526,8 @@ function rules() {
       ...mutedRows], "Все их новые сообщения удаляются у обоих."),
     section("Удалять оскорбления", [row({icon: "🤬", tint: "#ff9500", title: "Добавить чат", cls: "link", onclick: () => push(insultScreen)}),
       ...insultRows], "Claude читает каждое входящее сообщение в этих чатах и удаляет оскорбительные у обоих."),
+    section("Оценивать мемы", [row({icon: "🗳", tint: "#34c759", title: "Добавить чат", cls: "link", onclick: () => push(memeScreen)}),
+      ...memeRows], "Под каждым фото, видео и гифкой — опрос «Оцени мем» от 1 до 10, через несколько часов — итог."),
   ];
 }
 
@@ -566,6 +572,18 @@ function insultScreen() {
     h("div", {class: "btns"}, btn("Включить", async () => {
       if (!target.value.trim()) return toast("В каком чате?", true);
       if (await run("filter", "ai", {target: target.value.trim()})) pop();
+    })),
+  ];
+}
+
+function memeScreen() {
+  const target = h("input", {class: "field", placeholder: "@чат или #id из .rules", autocapitalize: "off"});
+  return [
+    head("Оценивать мемы"),
+    section("Где", [target], "Проще всего написать .memes прямо в нужном чате."),
+    h("div", {class: "btns"}, btn("Включить", async () => {
+      if (!target.value.trim()) return toast("В каком чате?", true);
+      if (await run("memes", "", {target: target.value.trim()})) pop();
     })),
   ];
 }
